@@ -57,6 +57,7 @@ import Control.Monad.Trans.Reader (ReaderT(..))
 import Control.Monad.Error.Class
 
 import Data.Aeson
+import qualified Data.ByteString.Char8 as B8
 import qualified Data.ByteString.Lazy as BL
 import Data.Conduit
 import Data.Monoid
@@ -130,7 +131,7 @@ app = do
           =$ CL.mapM_ (liftIO ∘ print)
       True →
         limitConduit
-        =$ CL.mapM_ (liftIO ∘ print ∘ recordData)
+        =$ CL.mapM_ (liftIO ∘ B8.putStrLn ∘ recordData)
   return ()
 
 main ∷ IO ()
