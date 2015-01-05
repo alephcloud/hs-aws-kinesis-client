@@ -197,8 +197,10 @@ withKinesisConsumer kit inner =
         producerLoop = forever $
           handleError (\_ → liftIO $ threadDelay 2000000) $ do
             recordsCount ← replenishMessages messageQueue state
-            when (recordsCount ≡ 0) $
-              liftIO $ threadDelay 5000000
+            liftIO . threadDelay $
+              case recordsCount of
+                0 → 5000000
+                _ → 70000
 
 
     withAsync reshardingLoop $ \reshardingHandle → do
