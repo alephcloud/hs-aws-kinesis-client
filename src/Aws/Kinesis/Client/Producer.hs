@@ -482,7 +482,8 @@ exhaustTBMQueue q = do
 -- continuation with a return in 'Codensity'.
 --
 managedKinesisProducer
-  ∷ ( MonadIO m
+  ∷ ∀ m
+  . ( MonadIO m
     , MonadBaseControl IO m
     , MonadError ProducerError m
     )
@@ -497,7 +498,7 @@ managedKinesisProducer kit = do
   let chunkingPolicy = ChunkingPolicy ((kit ^. pkBatchPolicy ∘ bpBatchSize) * (kit ^. pkMaxConcurrency)) 5000000
       -- TODO: this 'forever' is only here to restart if we get killed.
       -- Replace with proper error handling.
-      consumerLoop = flip runReaderT kit ∘ forever $
+      consumerLoop ∷ m () = flip runReaderT kit ∘ forever $
         chunkSource chunkingPolicy (sourceTBMQueue messageQueue)
           $$ sendMessagesSink
 
@@ -516,7 +517,7 @@ managedKinesisProducer kit = do
   Codensity $ \inner → do
     link consumerHandle
     res ← inner $ KinesisProducer messageQueue
-    void $ wait consumerHandle
+    () ← wait consumerHandle
     return res
 
 
