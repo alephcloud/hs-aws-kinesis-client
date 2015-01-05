@@ -25,7 +25,7 @@
 
 -- |
 -- Module: Aws.Kinesis.Client.Common
--- Copyright: Copyright © 2014 AlephCloud Systems, Inc.
+-- Copyright: Copyright © 2013-2014 PivotCloud, Inc.
 -- License: Apache-2.0
 -- Maintainer: Jon Sterling <jsterling@alephcloud.com>
 -- Stability: experimental
