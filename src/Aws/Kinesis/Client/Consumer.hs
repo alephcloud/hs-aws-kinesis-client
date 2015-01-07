@@ -62,6 +62,7 @@ import Control.Concurrent.STM
 import Control.Concurrent.STM.Queue
 import Control.Exception
 import Control.Lens
+import Control.Lens.Action
 import Control.Monad.Codensity
 import Control.Monad.Error.Class
 import Control.Monad.Reader
