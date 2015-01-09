@@ -18,6 +18,7 @@
 
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE UnicodeSyntax #-}
 
 -- |
@@ -30,6 +31,9 @@
 
 module CLI.Options
 ( CLIOptions(..)
+, clioStreamName
+, clioLimit
+, clioIteratorType
 , optionsParser
 , parserInfo
 ) where
@@ -44,10 +48,12 @@ import Prelude.Unicode
 
 data CLIOptions
   = CLIOptions
-  { clioStreamName ∷ !StreamName
-  , clioLimit ∷ !Int
-  , clioIteratorType ∷ !ShardIteratorType
+  { _clioStreamName ∷ !StreamName
+  , _clioLimit ∷ !Int
+  , _clioIteratorType ∷ !ShardIteratorType
   } deriving Show
+
+makeLenses ''CLIOptions
 
 eitherTextReader
   ∷ ( T.IsText i

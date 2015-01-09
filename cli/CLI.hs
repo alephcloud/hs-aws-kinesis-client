@@ -46,6 +46,7 @@ import Aws.Kinesis.Client.Consumer
 
 import CLI.Options
 
+import Control.Lens
 import Control.Monad.Trans
 import Control.Monad.Trans.Control
 import Control.Monad.Trans.Either
@@ -74,7 +75,7 @@ limitConduit
   ∷ MonadCLI m
   ⇒ Conduit a m a
 limitConduit =
-  lift (asks clioLimit) ≫=
+  lift (view clioLimit) ≫=
     CL.isolate
 
 app
@@ -90,9 +91,9 @@ app = do
         , _kkConfiguration = awsConfiguration
         , _kkKinesisConfiguration = KinesisConfiguration UsWest2
         }
-    , _ckStreamName = clioStreamName
+    , _ckStreamName = _clioStreamName
     , _ckBatchSize = 100
-    , _ckIteratorType = clioIteratorType
+    , _ckIteratorType = _clioIteratorType
     }
 
   lift $ consumerSource consumer $$
