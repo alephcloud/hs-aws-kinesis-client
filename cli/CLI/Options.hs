@@ -87,8 +87,8 @@ iteratorTypeParser =
 
 optionsParser ∷ Parser CLIOptions
 optionsParser =
-  CLIOptions
-    <$> streamNameParser
+  pure CLIOptions
+    ⊛ streamNameParser
     ⊛ limitParser
     ⊛ iteratorTypeParser
 
