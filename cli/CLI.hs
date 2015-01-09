@@ -43,26 +43,19 @@ import Aws.Kinesis.Client.Common
 import Aws.Kinesis.Client.Consumer
 
 import CLI.Options
-import CLI.Record
 
-import Control.Applicative
 import Control.Monad
 import Control.Monad.Trans
 import Control.Monad.Trans.Control
 import Control.Monad.Trans.Either
-import Control.Monad.Trans.Resource
 import Control.Monad.Codensity
 import Control.Monad.Reader.Class
 import Control.Monad.Trans.Reader (ReaderT(..))
 import Control.Monad.Error.Class
 
-import Data.Aeson
 import qualified Data.ByteString.Char8 as B8
-import qualified Data.ByteString.Lazy as BL
 import Data.Conduit
-import Data.Monoid
 import qualified Data.Conduit.List as CL
-import qualified Data.Text.Lens as T
 
 import Options.Applicative
 import qualified Network.HTTP.Conduit as HC
@@ -87,14 +80,6 @@ limitConduit
 limitConduit =
   lift (asks clioLimit) ≫=
     CL.isolate
-
-filterConduit
-  ∷ MonadCLI m
-  ⇒ Conduit Record m Record
-filterConduit = do
-  CLIOptions{..} ← lift ask
-  CL.filter (\Record{..} → maybe True (rTimestamp ≥) clioStartDate)
-    =$ takeTill (\Record{..} → maybe False (rTimestamp >) clioEndDate)
 
 takeTill
   ∷ Monad m
@@ -123,15 +108,7 @@ app = do
     }
 
   lift $ consumerSource consumer $$
-    case clioRaw of
-      False →
-        CL.mapMaybe (decode ∘ BL.fromChunks ∘ (:[]) ∘ recordData)
-          =$ filterConduit
-          =$ limitConduit
-          =$ CL.mapM_ (liftIO ∘ print)
-      True →
-        limitConduit
-        =$ CL.mapM_ (liftIO ∘ B8.putStrLn ∘ recordData)
+    limitConduit =$ CL.mapM_ (liftIO ∘ B8.putStrLn ∘ recordData)
   return ()
 
 main ∷ IO ()
