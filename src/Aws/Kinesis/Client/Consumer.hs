@@ -23,6 +23,7 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TupleSections #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE UnicodeSyntax #-}
 
@@ -69,6 +70,7 @@ import Control.Monad.Reader
 import Control.Monad.Trans.Control
 import Control.Monad.Unicode
 import qualified Data.Carousel as CR
+import Data.Traversable (for)
 import Data.Conduit
 import qualified Data.Conduit.List as CL
 import Prelude.Unicode
@@ -79,9 +81,10 @@ data ShardState
   = ShardState
   { _ssIterator ∷ !(TVar (Maybe Kin.ShardIterator))
   , _ssShardId ∷ !Kin.ShardId
+  , _ssLastSequenceNumber ∷ !(TVar (Maybe Kin.SequenceNumber))
   }
 
--- | A lens for '_ssIterator'.
+-- | A getter for '_ssIterator'.
 --
 ssIterator ∷ Getter ShardState (TVar (Maybe Kin.ShardIterator))
 ssIterator = to _ssIterator
@@ -90,6 +93,11 @@ ssIterator = to _ssIterator
 --
 ssShardId ∷ Lens' ShardState Kin.ShardId
 ssShardId = lens _ssShardId $ \ss sid → ss { _ssShardId = sid }
+
+-- | A getter for '_ssLastSequenceNumber'.
+--
+ssLastSequenceNumber ∷ Getter ShardState (TVar (Maybe Kin.SequenceNumber))
+ssLastSequenceNumber = to _ssLastSequenceNumber
 
 -- | 'ShardState' is quotiented by shard ID.
 --
@@ -141,13 +149,18 @@ ckBatchSize = lens _ckBatchSize $ \ck bs → ck { _ckBatchSize = bs }
 ckIteratorType ∷ Lens' ConsumerKit Kin.ShardIteratorType
 ckIteratorType = lens _ckIteratorType $ \ck it → ck { _ckIteratorType = it }
 
+type MessageQueueItem = (ShardState, Kin.Record)
+
 -- | The 'KinesisConsumer' maintains state about which shards to pull from.
 --
-newtype KinesisConsumer = KinesisConsumer { _kcMessageQueue ∷ TBQueue Kin.Record }
+newtype KinesisConsumer
+  = KinesisConsumer
+  { _kcMessageQueue ∷ TBQueue MessageQueueItem
+  }
 
 -- | A getter for '_kcMessageQueue'.
 --
-kcMessageQueue ∷ Getter KinesisConsumer (TBQueue Kin.Record)
+kcMessageQueue ∷ Getter KinesisConsumer (TBQueue MessageQueueItem)
 kcMessageQueue = to _kcMessageQueue
 
 -- | The basic effect modality required for operating the consumer.
@@ -231,24 +244,27 @@ updateStreamState state = do
 
     newShards ← shardSource $$ CL.consume
     shardStates ← forM newShards $ \Kin.Shard{..} → do
-      Kin.GetShardIteratorResponse it ←  runKinesis Kin.GetShardIterator
+      Kin.GetShardIteratorResponse it ← runKinesis Kin.GetShardIterator
         { Kin.getShardIteratorShardId = shardShardId
         , Kin.getShardIteratorShardIteratorType = iteratorType
         , Kin.getShardIteratorStartingSequenceNumber = Nothing
         , Kin.getShardIteratorStreamName = streamName
         }
-      iteratorVar ← liftIO ∘ newTVarIO $ Just it
-      return ShardState
-        { _ssIterator = iteratorVar
-        , _ssShardId = shardShardId
-        }
+      liftIO $ do
+        iteratorVar ← newTVarIO $ Just it
+        sequenceNumberVar ← newTVarIO Nothing
+        return ShardState
+          { _ssIterator = iteratorVar
+          , _ssShardId = shardShardId
+          , _ssLastSequenceNumber = sequenceNumberVar
+          }
     return ∘ CR.nub $ CR.append shardStates state
 
 -- | Waits for a message queue to be emptied and fills it up again.
 --
 replenishMessages
   ∷ MonadConsumerInternal m
-  ⇒ TBQueue Kin.Record
+  ⇒ TBQueue MessageQueueItem
   → TVar (CR.Carousel ShardState)
   → m Int
 replenishMessages messageQueue shardsVar = do
@@ -268,7 +284,7 @@ replenishMessages messageQueue shardsVar = do
 
   liftIO ∘ atomically $ do
     writeTVar (shard ^. ssIterator) getRecordsResNextShardIterator
-    forM_ getRecordsResRecords $ writeTBQueue messageQueue
+    forM_ getRecordsResRecords $ writeTBQueue messageQueue ∘ (shard ,)
     modifyTVar shardsVar CR.moveRight
 
   return $ length getRecordsResRecords
@@ -280,8 +296,10 @@ readConsumer
   ⇒ KinesisConsumer
   → m Kin.Record
 readConsumer consumer =
-  liftIO ∘ atomically $
-    consumer ^! kcMessageQueue ∘ act readTBQueue
+  liftIO ∘ atomically $ do
+    (ss, rec) ← consumer ^! kcMessageQueue ∘ act readTBQueue
+    writeTVar (ss ^. ssLastSequenceNumber) ∘ Just $ Kin.recordSequenceNumber rec
+    return rec
 
 -- | Try to read a single record from the consumer; if there is non queued up,
 -- then 'Nothing' will be returned.
@@ -291,8 +309,11 @@ tryReadConsumer
   ⇒ KinesisConsumer
   → m (Maybe Kin.Record)
 tryReadConsumer consumer =
-  liftIO ∘ atomically $
-    consumer ^! kcMessageQueue ∘ act tryReadTBQueue
+  liftIO ∘ atomically $ do
+    mitem ← consumer ^! kcMessageQueue ∘ act tryReadTBQueue
+    for mitem $ \(ss, rec) → do
+      writeTVar (ss ^. ssLastSequenceNumber) ∘ Just $ Kin.recordSequenceNumber rec
+      return rec
 
 -- | A conduit for getting records.
 --
