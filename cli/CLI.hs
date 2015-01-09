@@ -17,13 +17,16 @@
 -- under the License.
 
 {-# LANGUAGE ConstraintKinds #-}
+{-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE UnicodeSyntax #-}
 
 -- |
@@ -34,40 +37,44 @@
 -- Stability: experimental
 --
 
-module Main where
+module Main
+( main
+) where
 
-import Aws.Aws
+import Aws
 import Aws.General
 import Aws.Kinesis hiding (Record)
 import Aws.Kinesis.Client.Common
 import Aws.Kinesis.Client.Consumer
 
 import CLI.Options
-import CLI.Record
 
-import Control.Applicative
-import Control.Monad
+import Control.Exception
+import Control.Lens
 import Control.Monad.Trans
 import Control.Monad.Trans.Control
 import Control.Monad.Trans.Either
-import Control.Monad.Trans.Resource
 import Control.Monad.Codensity
 import Control.Monad.Reader.Class
 import Control.Monad.Trans.Reader (ReaderT(..))
 import Control.Monad.Error.Class
+import Control.Monad.Error.Hoist
 
-import Data.Aeson
 import qualified Data.ByteString.Char8 as B8
-import qualified Data.ByteString.Lazy as BL
 import Data.Conduit
-import Data.Monoid
 import qualified Data.Conduit.List as CL
-import qualified Data.Text.Lens as T
+import Data.Typeable
 
 import Options.Applicative
 import qualified Network.HTTP.Conduit as HC
 import Prelude.Unicode
 import Control.Monad.Unicode
+
+data CLIError
+  = MissingCredentials
+  deriving (Typeable, Show)
+
+instance Exception CLIError
 
 type MonadCLI m
   = ( MonadReader CLIOptions m
@@ -76,33 +83,25 @@ type MonadCLI m
     , MonadError ConsumerError m
     )
 
-identityConduit
-  ∷ Monad m
-  ⇒ Conduit a m a
-identityConduit = CL.map id
-
 limitConduit
   ∷ MonadCLI m
   ⇒ Conduit a m a
 limitConduit =
-  lift (asks clioLimit) ≫=
+  lift (view clioLimit) ≫=
     CL.isolate
 
-filterConduit
+fetchCredentials
   ∷ MonadCLI m
-  ⇒ Conduit Record m Record
-filterConduit = do
-  CLIOptions{..} ← lift ask
-  CL.filter (\Record{..} → maybe True (rTimestamp ≥) clioStartDate)
-    =$ takeTill (\Record{..} → maybe False (rTimestamp >) clioEndDate)
-
-takeTill
-  ∷ Monad m
-  ⇒ (i → Bool)
-  → Conduit i m i
-takeTill f = loop
-  where
-    loop = await ≫= maybe (return ()) (\x → unless (f x) $ yield x ≫ loop)
+  ⇒ m Credentials
+fetchCredentials = do
+  view clioAccessKeys ≫= \case
+    Left aks →
+      makeCredentials
+        (aks ^. akAccessKeyId)
+        (aks ^. akSecretAccessKey)
+    Right path →
+      loadCredentialsFromFile path credentialsDefaultKey
+        <!?> KinesisError (toException MissingCredentials)
 
 app
   ∷ MonadCLI m
@@ -110,28 +109,24 @@ app
 app = do
   CLIOptions{..} ← ask
   manager ← managedHttpManager
-  awsConfiguration ← liftIO baseConfiguration
+  credentials ← lift fetchCredentials
   consumer ← managedKinesisConsumer $ ConsumerKit
     { _ckKinesisKit = KinesisKit
         { _kkManager = manager
-        , _kkConfiguration = awsConfiguration
+        , _kkConfiguration = Configuration
+             { timeInfo = Timestamp
+             , credentials = credentials
+             , logger = defaultLog Warning
+             }
         , _kkKinesisConfiguration = KinesisConfiguration UsWest2
         }
-    , _ckStreamName = clioStreamName
+    , _ckStreamName = _clioStreamName
     , _ckBatchSize = 100
-    , _ckIteratorType = clioIteratorType
+    , _ckIteratorType = _clioIteratorType
     }
 
   lift $ consumerSource consumer $$
-    case clioRaw of
-      False →
-        CL.mapMaybe (decode ∘ BL.fromChunks ∘ (:[]) ∘ recordData)
-          =$ filterConduit
-          =$ limitConduit
-          =$ CL.mapM_ (liftIO ∘ print)
-      True →
-        limitConduit
-        =$ CL.mapM_ (liftIO ∘ B8.putStrLn ∘ recordData)
+    limitConduit =$ CL.mapM_ (liftIO ∘ B8.putStrLn ∘ recordData)
   return ()
 
 main ∷ IO ()

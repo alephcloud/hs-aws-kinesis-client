@@ -18,6 +18,7 @@
 
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE UnicodeSyntax #-}
 
 -- |
@@ -30,31 +31,42 @@
 
 module CLI.Options
 ( CLIOptions(..)
+, clioStreamName
+, clioLimit
+, clioIteratorType
+, clioAccessKeys
+, AccessKeys(..)
+, akAccessKeyId
+, akSecretAccessKey
 , optionsParser
 , parserInfo
 ) where
 
 import Aws.Kinesis
+import qualified Data.ByteString.Char8 as B8
 import Control.Applicative.Unicode
 import Control.Lens
-import Control.Monad.Unicode
 import Data.Monoid.Unicode
-import qualified Data.Text as T
 import qualified Data.Text.Lens as T
-import Data.Hourglass
 import Options.Applicative
 import Prelude.Unicode
 
+data AccessKeys
+  = AccessKeys
+  { _akAccessKeyId ∷ !B8.ByteString
+  , _akSecretAccessKey ∷ !B8.ByteString
+  } deriving Show
+
 data CLIOptions
   = CLIOptions
-  { clioStreamName ∷ StreamName
-  , clioLimit ∷ Int
-  , clioIteratorType ∷ ShardIteratorType
-  , clioStartDate ∷ Maybe DateTime
-  , clioEndDate ∷ Maybe DateTime
-  -- , clioTimeDuration ∷ Maybe Seconds
-  , clioRaw ∷ Bool
+  { _clioStreamName ∷ !StreamName
+  , _clioLimit ∷ !Int
+  , _clioIteratorType ∷ !ShardIteratorType
+  , _clioAccessKeys ∷ !(Either AccessKeys FilePath)
   } deriving Show
+
+makeLenses ''AccessKeys
+makeLenses ''CLIOptions
 
 eitherTextReader
   ∷ ( T.IsText i
@@ -65,6 +77,33 @@ eitherTextReader
 eitherTextReader f =
   eitherReader $
     (_Left %~ view T.unpacked) ∘ f ∘ view T.packed
+
+accessKeyIdParser ∷ Parser B8.ByteString
+accessKeyIdParser =
+  fmap B8.pack ∘ strOption $
+    long "access-key-id"
+    ⊕ metavar "ID"
+    ⊕ help "Your AWS access key id"
+
+secretAccessKeyParser ∷ Parser B8.ByteString
+secretAccessKeyParser =
+  fmap B8.pack ∘ strOption $
+    long "secret-access-key"
+    ⊕ metavar "SK"
+    ⊕ help "Your AWS secret access key"
+
+accessKeysParser ∷ Parser AccessKeys
+accessKeysParser =
+  pure AccessKeys
+    ⊛ accessKeyIdParser
+    ⊛ secretAccessKeyParser
+
+accessKeysPathParser ∷ Parser FilePath
+accessKeysPathParser =
+  strOption $
+    long "access-keys-path"
+    ⊕ metavar "PATH"
+    ⊕ help "The path to a file containing your access keys. To be formatted \"default ID SECRET\""
 
 streamNameParser ∷ Parser StreamName
 streamNameParser =
@@ -92,52 +131,18 @@ iteratorTypeParser =
     ⊕ value TrimHorizon
     ⊕ showDefault
 
-readDateTime
-  ∷ String
-  → ReadM DateTime
-readDateTime =
-  maybe (readerError "Invalid DateTime") return
-  ∘ timeParse ISO8601_DateAndTime
-
-startDateParser ∷ Parser DateTime
-startDateParser =
-  option (str ≫= readDateTime) $
-    long "start-date"
-    ⊕ short 's'
-    ⊕ metavar "SD"
-    ⊕ help "Start Date (ISO 8601)"
-
-endDateParser ∷ Parser DateTime
-endDateParser =
-  option (str ≫= readDateTime) $
-    long "end-date"
-    ⊕ short 'e'
-    ⊕ metavar "ED"
-    ⊕ help "End Date (ISO 8601)"
-
-timeDurationParser ∷ Parser Seconds
-timeDurationParser =
-  option auto $
-    long "end-date"
-    ⊕ short 'e'
-    ⊕ metavar "ED"
-    ⊕ help "Time window from start (in seconds)"
-
 optionsParser ∷ Parser CLIOptions
 optionsParser =
-  CLIOptions
-    <$> streamNameParser
+  pure CLIOptions
+    ⊛ streamNameParser
     ⊛ limitParser
     ⊛ iteratorTypeParser
-    ⊛ optional startDateParser
-    ⊛ optional endDateParser
-    -- ⊛ optional timeDurationParser
-    ⊛ switch (long "raw" ⊕ help "Treat records as raw text")
+    ⊛ (Left <$> accessKeysParser <|> Right <$> accessKeysPathParser)
 
 parserInfo ∷ ParserInfo CLIOptions
 parserInfo =
   info (helper ⊛ optionsParser) $
     fullDesc
-    ⊕ progDesc "Fetch `L` records from a Kinesis stream `SN`. Put your AWS keys in ~/.aws-keys"
+    ⊕ progDesc "Fetch `L` records from a Kinesis stream `SN`."
     ⊕ header "The Kinesis Consumer CLI"
 
