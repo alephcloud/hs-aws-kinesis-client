@@ -44,6 +44,7 @@ module Aws.Kinesis.Client.Consumer
 , consumerSource
 , readConsumer
 , tryReadConsumer
+, consumerStreamState
 
   -- * Consumer Environment
 , ConsumerKit(..)
@@ -57,6 +58,7 @@ module Aws.Kinesis.Client.Consumer
 import qualified Aws.Kinesis as Kin
 import Aws.Kinesis.Client.Common
 
+import Control.Applicative
 import Control.Concurrent.Async.Lifted
 import Control.Concurrent.Lifted hiding (yield)
 import Control.Concurrent.STM
@@ -70,6 +72,7 @@ import Control.Monad.Reader
 import Control.Monad.Trans.Control
 import Control.Monad.Unicode
 import qualified Data.Carousel as CR
+import qualified Data.Map as M
 import Data.Traversable (for)
 import Data.Conduit
 import qualified Data.Conduit.List as CL
@@ -150,18 +153,25 @@ ckIteratorType ∷ Lens' ConsumerKit Kin.ShardIteratorType
 ckIteratorType = lens _ckIteratorType $ \ck it → ck { _ckIteratorType = it }
 
 type MessageQueueItem = (ShardState, Kin.Record)
+type StreamState = CR.Carousel ShardState
 
 -- | The 'KinesisConsumer' maintains state about which shards to pull from.
 --
-newtype KinesisConsumer
+data KinesisConsumer
   = KinesisConsumer
-  { _kcMessageQueue ∷ TBQueue MessageQueueItem
+  { _kcMessageQueue ∷ !(TBQueue MessageQueueItem)
+  , _kcStreamState ∷ !(TVar StreamState)
   }
 
 -- | A getter for '_kcMessageQueue'.
 --
 kcMessageQueue ∷ Getter KinesisConsumer (TBQueue MessageQueueItem)
 kcMessageQueue = to _kcMessageQueue
+
+-- | A getter for '_kcStreamState'.
+--
+kcStreamState ∷ Getter KinesisConsumer (TVar StreamState)
+kcStreamState = to _kcStreamState
 
 -- | The basic effect modality required for operating the consumer.
 --
@@ -221,7 +231,7 @@ withKinesisConsumer kit inner =
       link reshardingHandle
       withAsync producerLoop $ \producerHandle → do
         link producerHandle
-        res ← lift ∘ inner $ KinesisConsumer messageQueue
+        res ← lift ∘ inner $ KinesisConsumer messageQueue state
         return res
 
 -- | This requests new information from Kinesis and reconciles that with an
@@ -229,8 +239,8 @@ withKinesisConsumer kit inner =
 --
 updateStreamState
   ∷ MonadConsumerInternal m
-  ⇒ CR.Carousel ShardState
-  → m (CR.Carousel ShardState)
+  ⇒ StreamState
+  → m StreamState
 updateStreamState state = do
   streamName ← view ckStreamName
   iteratorType ← view ckIteratorType
@@ -265,7 +275,7 @@ updateStreamState state = do
 replenishMessages
   ∷ MonadConsumerInternal m
   ⇒ TBQueue MessageQueueItem
-  → TVar (CR.Carousel ShardState)
+  → TVar StreamState
   → m Int
 replenishMessages messageQueue shardsVar = do
   bufferSize ← view ckBatchSize
@@ -325,3 +335,18 @@ consumerSource consumer =
   forever $
     lift (readConsumer consumer)
       ≫= yield
+
+-- | Get the last read sequence number at each shard.
+--
+consumerStreamState
+  ∷ MonadConsumer m
+  ⇒ KinesisConsumer
+  → m (M.Map Kin.ShardId Kin.SequenceNumber)
+consumerStreamState consumer =
+  liftIO ∘ atomically $ do
+    shards ← consumer ^! kcStreamState ∘ act readTVar ∘ CR.clList
+    pairs ← for shards $ \ss →
+      (ss ^. ssShardId,) <$>
+        ss ^! ssLastSequenceNumber ∘ act readTVar
+    return ∘ M.fromList $ pairs ≫= \(sid, msn) →
+      maybe [] ((:[]) ∘ (sid,)) msn
