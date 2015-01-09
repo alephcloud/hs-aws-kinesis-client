@@ -44,9 +44,9 @@ import Prelude.Unicode
 
 data CLIOptions
   = CLIOptions
-  { clioStreamName ∷ StreamName
-  , clioLimit ∷ Int
-  , clioIteratorType ∷ ShardIteratorType
+  { clioStreamName ∷ !StreamName
+  , clioLimit ∷ !Int
+  , clioIteratorType ∷ !ShardIteratorType
   } deriving Show
 
 eitherTextReader
