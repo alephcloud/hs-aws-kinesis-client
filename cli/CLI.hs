@@ -34,7 +34,9 @@
 -- Stability: experimental
 --
 
-module Main where
+module Main
+( main
+) where
 
 import Aws.Aws
 import Aws.General
@@ -44,7 +46,6 @@ import Aws.Kinesis.Client.Consumer
 
 import CLI.Options
 
-import Control.Monad
 import Control.Monad.Trans
 import Control.Monad.Trans.Control
 import Control.Monad.Trans.Either
@@ -69,25 +70,12 @@ type MonadCLI m
     , MonadError ConsumerError m
     )
 
-identityConduit
-  ∷ Monad m
-  ⇒ Conduit a m a
-identityConduit = CL.map id
-
 limitConduit
   ∷ MonadCLI m
   ⇒ Conduit a m a
 limitConduit =
   lift (asks clioLimit) ≫=
     CL.isolate
-
-takeTill
-  ∷ Monad m
-  ⇒ (i → Bool)
-  → Conduit i m i
-takeTill f = loop
-  where
-    loop = await ≫= maybe (return ()) (\x → unless (f x) $ yield x ≫ loop)
 
 app
   ∷ MonadCLI m
