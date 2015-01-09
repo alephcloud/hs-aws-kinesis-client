@@ -17,13 +17,16 @@
 -- under the License.
 
 {-# LANGUAGE ConstraintKinds #-}
+{-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE UnicodeSyntax #-}
 
 -- |
@@ -38,7 +41,7 @@ module Main
 ( main
 ) where
 
-import Aws.Aws
+import Aws
 import Aws.General
 import Aws.Kinesis hiding (Record)
 import Aws.Kinesis.Client.Common
@@ -46,6 +49,7 @@ import Aws.Kinesis.Client.Consumer
 
 import CLI.Options
 
+import Control.Exception
 import Control.Lens
 import Control.Monad.Trans
 import Control.Monad.Trans.Control
@@ -54,15 +58,23 @@ import Control.Monad.Codensity
 import Control.Monad.Reader.Class
 import Control.Monad.Trans.Reader (ReaderT(..))
 import Control.Monad.Error.Class
+import Control.Monad.Error.Hoist
 
 import qualified Data.ByteString.Char8 as B8
 import Data.Conduit
 import qualified Data.Conduit.List as CL
+import Data.Typeable
 
 import Options.Applicative
 import qualified Network.HTTP.Conduit as HC
 import Prelude.Unicode
 import Control.Monad.Unicode
+
+data CLIError
+  = MissingCredentials
+  deriving (Typeable, Show)
+
+instance Exception CLIError
 
 type MonadCLI m
   = ( MonadReader CLIOptions m
@@ -78,17 +90,34 @@ limitConduit =
   lift (view clioLimit) ≫=
     CL.isolate
 
+fetchCredentials
+  ∷ MonadCLI m
+  ⇒ m Credentials
+fetchCredentials = do
+  view clioAccessKeys ≫= \case
+    Left aks →
+      makeCredentials
+        (aks ^. akAccessKeyId)
+        (aks ^. akSecretAccessKey)
+    Right path →
+      loadCredentialsFromFile path credentialsDefaultKey
+        <!?> KinesisError (toException MissingCredentials)
+
 app
   ∷ MonadCLI m
   ⇒ Codensity m ()
 app = do
   CLIOptions{..} ← ask
   manager ← managedHttpManager
-  awsConfiguration ← liftIO baseConfiguration
+  credentials ← lift fetchCredentials
   consumer ← managedKinesisConsumer $ ConsumerKit
     { _ckKinesisKit = KinesisKit
         { _kkManager = manager
-        , _kkConfiguration = awsConfiguration
+        , _kkConfiguration = Configuration
+             { timeInfo = Timestamp
+             , credentials = credentials
+             , logger = defaultLog Warning
+             }
         , _kkKinesisConfiguration = KinesisConfiguration UsWest2
         }
     , _ckStreamName = _clioStreamName

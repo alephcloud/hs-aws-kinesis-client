@@ -34,11 +34,16 @@ module CLI.Options
 , clioStreamName
 , clioLimit
 , clioIteratorType
+, clioAccessKeys
+, AccessKeys(..)
+, akAccessKeyId
+, akSecretAccessKey
 , optionsParser
 , parserInfo
 ) where
 
 import Aws.Kinesis
+import qualified Data.ByteString.Char8 as B8
 import Control.Applicative.Unicode
 import Control.Lens
 import Data.Monoid.Unicode
@@ -46,13 +51,21 @@ import qualified Data.Text.Lens as T
 import Options.Applicative
 import Prelude.Unicode
 
+data AccessKeys
+  = AccessKeys
+  { _akAccessKeyId ∷ !B8.ByteString
+  , _akSecretAccessKey ∷ !B8.ByteString
+  } deriving Show
+
 data CLIOptions
   = CLIOptions
   { _clioStreamName ∷ !StreamName
   , _clioLimit ∷ !Int
   , _clioIteratorType ∷ !ShardIteratorType
+  , _clioAccessKeys ∷ !(Either AccessKeys FilePath)
   } deriving Show
 
+makeLenses ''AccessKeys
 makeLenses ''CLIOptions
 
 eitherTextReader
@@ -64,6 +77,33 @@ eitherTextReader
 eitherTextReader f =
   eitherReader $
     (_Left %~ view T.unpacked) ∘ f ∘ view T.packed
+
+accessKeyIdParser ∷ Parser B8.ByteString
+accessKeyIdParser =
+  fmap B8.pack ∘ strOption $
+    long "access-key-id"
+    ⊕ metavar "ID"
+    ⊕ help "Your AWS access key id"
+
+secretAccessKeyParser ∷ Parser B8.ByteString
+secretAccessKeyParser =
+  fmap B8.pack ∘ strOption $
+    long "secret-access-key"
+    ⊕ metavar "SK"
+    ⊕ help "Your AWS secret access key"
+
+accessKeysParser ∷ Parser AccessKeys
+accessKeysParser =
+  pure AccessKeys
+    ⊛ accessKeyIdParser
+    ⊛ secretAccessKeyParser
+
+accessKeysPathParser ∷ Parser FilePath
+accessKeysPathParser =
+  strOption $
+    long "access-keys-path"
+    ⊕ metavar "PATH"
+    ⊕ help "The path to a file containing your access keys. To be formatted \"default ID SECRET\""
 
 streamNameParser ∷ Parser StreamName
 streamNameParser =
@@ -97,11 +137,12 @@ optionsParser =
     ⊛ streamNameParser
     ⊛ limitParser
     ⊛ iteratorTypeParser
+    ⊛ (Left <$> accessKeysParser <|> Right <$> accessKeysPathParser)
 
 parserInfo ∷ ParserInfo CLIOptions
 parserInfo =
   info (helper ⊛ optionsParser) $
     fullDesc
-    ⊕ progDesc "Fetch `L` records from a Kinesis stream `SN`. Put your AWS keys in ~/.aws-keys"
+    ⊕ progDesc "Fetch `L` records from a Kinesis stream `SN`."
     ⊕ header "The Kinesis Consumer CLI"
 
