@@ -28,13 +28,13 @@
 -- Maintainer: Jon Sterling <jsterling@alephcloud.com>
 -- Stability: experimental
 --
-
 module CLI.Options
 ( CLIOptions(..)
 , clioStreamName
 , clioLimit
 , clioIteratorType
 , clioAccessKeys
+, clioPrintState
 , AccessKeys(..)
 , akAccessKeyId
 , akSecretAccessKey
@@ -63,6 +63,7 @@ data CLIOptions
   , _clioLimit ∷ !Int
   , _clioIteratorType ∷ !ShardIteratorType
   , _clioAccessKeys ∷ !(Either AccessKeys FilePath)
+  , _clioPrintState ∷ !Bool
   } deriving Show
 
 makeLenses ''AccessKeys
@@ -131,6 +132,15 @@ iteratorTypeParser =
     ⊕ value TrimHorizon
     ⊕ showDefault
 
+printStateParser ∷ Parser Bool
+printStateParser =
+  option auto $
+    long "print-state"
+    ⊕ help "Whether to print the last read sequence number for each shard upon termination"
+    ⊕ metavar "BOOL"
+    ⊕ value False
+    ⊕ showDefault
+
 optionsParser ∷ Parser CLIOptions
 optionsParser =
   pure CLIOptions
@@ -138,6 +148,7 @@ optionsParser =
     ⊛ limitParser
     ⊛ iteratorTypeParser
     ⊛ (Left <$> accessKeysParser <|> Right <$> accessKeysPathParser)
+    ⊛ printStateParser
 
 parserInfo ∷ ParserInfo CLIOptions
 parserInfo =

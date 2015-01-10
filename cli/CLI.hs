@@ -36,7 +36,6 @@
 -- Maintainer: Jon Sterling <jsterling@alephcloud.com>
 -- Stability: experimental
 --
-
 module Main
 ( main
 ) where
@@ -51,6 +50,7 @@ import CLI.Options
 
 import Control.Exception
 import Control.Lens
+import Control.Monad
 import Control.Monad.Trans
 import Control.Monad.Trans.Control
 import Control.Monad.Trans.Either
@@ -60,9 +60,12 @@ import Control.Monad.Trans.Reader (ReaderT(..))
 import Control.Monad.Error.Class
 import Control.Monad.Error.Hoist
 
+import qualified Data.Aeson as A
 import qualified Data.ByteString.Char8 as B8
+import qualified Data.ByteString.Lazy.Char8 as BL8
 import Data.Conduit
 import qualified Data.Conduit.List as CL
+import qualified Data.Map as M
 import Data.Typeable
 
 import Options.Applicative
@@ -127,6 +130,12 @@ app = do
 
   lift $ consumerSource consumer $$
     limitConduit =$ CL.mapM_ (liftIO ∘ B8.putStrLn ∘ recordData)
+
+  when _clioPrintState $ do
+    state ← lift $ M.toList <$> consumerStreamState consumer
+    liftIO ∘ BL8.putStrLn ∘ A.encode ∘ A.object ∘ flip fmap state $ \(sid, sn) →
+        let A.String sid' = A.toJSON sid
+        in sid' A..= sn
   return ()
 
 main ∷ IO ()

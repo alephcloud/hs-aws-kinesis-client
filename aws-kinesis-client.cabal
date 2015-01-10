@@ -58,10 +58,12 @@ executable kinesis-cli
     other-modules:     CLI.Options
     build-depends:     base >=4.7 && <4.8,
                        base-unicode-symbols,
+                       aeson >=0.8,
                        aws >=0.10.5,
                        aws-general >=0.1.1,
                        aws-kinesis >=0.1.2,
                        aws-kinesis-client,
+                       containers >=0.5.5.1,
                        conduit >=1.2.3.1,
                        either >=4.3.2.1,
                        hoist-error >=0.1.0.2,
