@@ -53,12 +53,14 @@ module Aws.Kinesis.Client.Consumer
 , ckBatchSize
 , ConsumerError(..)
 , MonadConsumer
+, SavedStreamState
 ) where
 
 import qualified Aws.Kinesis as Kin
 import Aws.Kinesis.Client.Common
 
 import Control.Applicative
+import Control.Applicative.Unicode
 import Control.Concurrent.Async.Lifted
 import Control.Concurrent.Lifted hiding (yield)
 import Control.Concurrent.STM
@@ -71,8 +73,10 @@ import Control.Monad.Error.Class
 import Control.Monad.Reader
 import Control.Monad.Trans.Control
 import Control.Monad.Unicode
+import qualified Data.Aeson as Æ
 import qualified Data.Carousel as CR
 import qualified Data.Map as M
+import qualified Data.HashMap.Strict as HM
 import Data.Traversable (for)
 import Data.Conduit
 import qualified Data.Conduit.List as CL
@@ -155,6 +159,31 @@ ckIteratorType = lens _ckIteratorType $ \ck it → ck { _ckIteratorType = it }
 type MessageQueueItem = (ShardState, Kin.Record)
 type StreamState = CR.Carousel ShardState
 
+newtype SavedStreamState
+  = SavedStreamState
+  { _savedStreamState ∷ M.Map Kin.ShardId Kin.SequenceNumber
+  }
+
+-- | An iso for 'SavedStreamState'.
+--
+_SavedStreamState ∷ Iso' SavedStreamState (M.Map Kin.ShardId Kin.SequenceNumber)
+_SavedStreamState = iso _savedStreamState SavedStreamState
+
+instance Æ.ToJSON SavedStreamState where
+  toJSON (SavedStreamState m) =
+    Æ.Object ∘ HM.fromList ∘ flip fmap (M.toList m) $ \(sid, sn) →
+      let Æ.String sid' = Æ.toJSON sid
+      in sid' Æ..= sn
+
+instance Æ.FromJSON SavedStreamState where
+  parseJSON =
+    Æ.withObject "SavedStreamState" $ \xs → do
+      fmap (SavedStreamState ∘ M.fromList) ∘ for (HM.toList xs) $ \(sid, sn) → do
+        pure (,)
+          ⊛ Æ.parseJSON (Æ.String sid)
+          ⊛ Æ.parseJSON sn
+
+
 -- | The 'KinesisConsumer' maintains state about which shards to pull from.
 --
 data KinesisConsumer
@@ -221,7 +250,7 @@ withKinesisConsumer kit inner =
         producerLoop = forever $
           handleError (\_ → liftIO $ threadDelay 2000000) $ do
             recordsCount ← replenishMessages messageQueue state
-            liftIO . threadDelay $
+            liftIO ∘ threadDelay $
               case recordsCount of
                 0 → 5000000
                 _ → 70000
@@ -341,12 +370,12 @@ consumerSource consumer =
 consumerStreamState
   ∷ MonadConsumer m
   ⇒ KinesisConsumer
-  → m (M.Map Kin.ShardId Kin.SequenceNumber)
+  → m SavedStreamState
 consumerStreamState consumer =
   liftIO ∘ atomically $ do
     shards ← consumer ^! kcStreamState ∘ act readTVar ∘ CR.clList
     pairs ← for shards $ \ss →
       (ss ^. ssShardId,) <$>
         ss ^! ssLastSequenceNumber ∘ act readTVar
-    return ∘ M.fromList $ pairs ≫= \(sid, msn) →
-      maybe [] ((:[]) ∘ (sid,)) msn
+    return ∘ SavedStreamState ∘ M.fromList $ pairs ≫= \(sid, msn) →
+      msn ^.. _Just ∘ to (sid,)

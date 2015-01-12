@@ -24,6 +24,7 @@ library
   -- other-extensions:
   build-depends:       base >=4.7 && <4.8,
                        base-unicode-symbols,
+                       aeson >=0.8,
                        aws >=0.10.5,
                        aws-kinesis >=0.1.2,
                        conduit >=1.2.3.1,
@@ -46,7 +47,8 @@ library
                        stm-conduit >=2.5.3,
                        stm-queue-extras >=0.2.0.0,
                        text >=1.2.0.3,
-                       transformers >=0.3.0.0
+                       transformers >=0.3.0.0,
+                       unordered-containers >=0.2.5.1
   hs-source-dirs:      src
   default-language:    Haskell2010
   ghc-options:         -Wall
