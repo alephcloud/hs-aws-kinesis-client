@@ -18,4 +18,9 @@ during your use of it, please file a report using the issue tracker.
 #### Consumer Client CLI
 
 Also included is a minimal command line interface to the consumer
-client.
+client. To use it, please run
+
+````sh
+cabal install aws-kinesis-client
+kinesis-cli --help
+````

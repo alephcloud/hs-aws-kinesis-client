@@ -28,13 +28,14 @@
 -- Maintainer: Jon Sterling <jsterling@alephcloud.com>
 -- Stability: experimental
 --
-
 module CLI.Options
 ( CLIOptions(..)
 , clioStreamName
 , clioLimit
 , clioIteratorType
 , clioAccessKeys
+, clioStateIn
+, clioStateOut
 , AccessKeys(..)
 , akAccessKeyId
 , akSecretAccessKey
@@ -63,6 +64,8 @@ data CLIOptions
   , _clioLimit ∷ !Int
   , _clioIteratorType ∷ !ShardIteratorType
   , _clioAccessKeys ∷ !(Either AccessKeys FilePath)
+  , _clioStateIn ∷ !(Maybe FilePath)
+  , _clioStateOut ∷ !(Maybe FilePath)
   } deriving Show
 
 makeLenses ''AccessKeys
@@ -103,7 +106,7 @@ accessKeysPathParser =
   strOption $
     long "access-keys-path"
     ⊕ metavar "PATH"
-    ⊕ help "The path to a file containing your access keys. To be formatted \"default ID SECRET\""
+    ⊕ help "The path to a file containing your access keys. To be formatted \"default ID SECRET\"; you may provide this instead of the command line options for credentials"
 
 streamNameParser ∷ Parser StreamName
 streamNameParser =
@@ -131,6 +134,20 @@ iteratorTypeParser =
     ⊕ value TrimHorizon
     ⊕ showDefault
 
+stateOutParser ∷ Parser FilePath
+stateOutParser =
+  strOption $
+    long "save-state"
+    ⊕ help "Write the last known state of each shard to a file"
+    ⊕ metavar "FILE"
+
+stateInParser ∷ Parser FilePath
+stateInParser =
+  strOption $
+    long "restore-state"
+    ⊕ help "Read a saved stream state from a file. For any shards whose state is restored, the 'AFTER_SEQUENCE_NUMBER' iterator type will be used; other shards will use the iterator type you have specified. Some shards may have been merged or closed between when the state was saved and restored; at this point, no effort has been made to do anything here beyond the obvious (shards are identified by their shard-id)."
+    ⊕ metavar "FILE"
+
 optionsParser ∷ Parser CLIOptions
 optionsParser =
   pure CLIOptions
@@ -138,11 +155,13 @@ optionsParser =
     ⊛ limitParser
     ⊛ iteratorTypeParser
     ⊛ (Left <$> accessKeysParser <|> Right <$> accessKeysPathParser)
+    ⊛ optional stateInParser
+    ⊛ optional stateOutParser
 
 parserInfo ∷ ParserInfo CLIOptions
 parserInfo =
   info (helper ⊛ optionsParser) $
     fullDesc
-    ⊕ progDesc "Fetch `L` records from a Kinesis stream `SN`."
+    ⊕ progDesc "Fetch a given number of records from a Kinesis stream; unlike the standard command line utilities, this interface is suitable for use with a sharded stream. If you both specify a saved stream state to be restored and an iterator type, the latter will be used on any shards which are not contained in the saved state. Minimally, you must specify your AWS credentials, a stream name, and a limit."
     ⊕ header "The Kinesis Consumer CLI"
 

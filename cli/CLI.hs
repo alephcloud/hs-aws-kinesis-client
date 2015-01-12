@@ -36,7 +36,6 @@
 -- Maintainer: Jon Sterling <jsterling@alephcloud.com>
 -- Stability: experimental
 --
-
 module Main
 ( main
 ) where
@@ -51,6 +50,7 @@ import CLI.Options
 
 import Control.Exception
 import Control.Lens
+import Control.Monad
 import Control.Monad.Trans
 import Control.Monad.Trans.Control
 import Control.Monad.Trans.Either
@@ -60,9 +60,12 @@ import Control.Monad.Trans.Reader (ReaderT(..))
 import Control.Monad.Error.Class
 import Control.Monad.Error.Hoist
 
+import qualified Data.Aeson as A
 import qualified Data.ByteString.Char8 as B8
+import qualified Data.ByteString.Lazy.Char8 as BL8
 import Data.Conduit
 import qualified Data.Conduit.List as CL
+import Data.Traversable
 import Data.Typeable
 
 import Options.Applicative
@@ -110,6 +113,13 @@ app = do
   CLIOptions{..} ← ask
   manager ← managedHttpManager
   credentials ← lift fetchCredentials
+  savedStreamState ←
+    for _clioStateIn $
+      either (fail ∘ ("Invalid saved state: " ++))  return
+        <=< fmap A.eitherDecode
+          ∘ liftIO
+          ∘ BL8.readFile
+
   consumer ← managedKinesisConsumer $ ConsumerKit
     { _ckKinesisKit = KinesisKit
         { _kkManager = manager
@@ -123,11 +133,15 @@ app = do
     , _ckStreamName = _clioStreamName
     , _ckBatchSize = 100
     , _ckIteratorType = _clioIteratorType
+    , _ckSavedStreamState = savedStreamState
     }
 
   lift $ consumerSource consumer $$
     limitConduit =$ CL.mapM_ (liftIO ∘ B8.putStrLn ∘ recordData)
-  return ()
+
+  void ∘ for _clioStateOut $ \outPath → do
+    state ← lift $ consumerStreamState consumer
+    liftIO ∘ BL8.writeFile outPath $ A.encode state
 
 main ∷ IO ()
 main =
