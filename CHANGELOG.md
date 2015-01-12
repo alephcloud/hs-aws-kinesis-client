@@ -1,3 +1,10 @@
+### v0.2.0.0
+
+- [Consumer] Add the ability to save & restore stream state (i.e. last consumed
+  sequence number per shard).
+
+- [Consumer CLI] Add --save-state, --restore-state options
+
 ### v0.1.0.2
 
 - Support specifying AWS keys as options to the CLI (either directly or from a
