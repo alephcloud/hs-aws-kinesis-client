@@ -34,6 +34,7 @@ module CLI.Options
 , clioLimit
 , clioIteratorType
 , clioAccessKeys
+, clioStateIn
 , clioStateOut
 , AccessKeys(..)
 , akAccessKeyId
@@ -63,6 +64,7 @@ data CLIOptions
   , _clioLimit ∷ !Int
   , _clioIteratorType ∷ !ShardIteratorType
   , _clioAccessKeys ∷ !(Either AccessKeys FilePath)
+  , _clioStateIn ∷ !(Maybe FilePath)
   , _clioStateOut ∷ !(Maybe FilePath)
   } deriving Show
 
@@ -139,6 +141,13 @@ stateOutParser =
     ⊕ help "Write the last known state of each shard to a file"
     ⊕ metavar "FILE"
 
+stateInParser ∷ Parser FilePath
+stateInParser =
+  strOption $
+    long "in-state"
+    ⊕ help "Read a saved stream state from a file"
+    ⊕ metavar "FILE"
+
 optionsParser ∷ Parser CLIOptions
 optionsParser =
   pure CLIOptions
@@ -146,6 +155,7 @@ optionsParser =
     ⊛ limitParser
     ⊛ iteratorTypeParser
     ⊛ (Left <$> accessKeysParser <|> Right <$> accessKeysPathParser)
+    ⊛ optional stateInParser
     ⊛ optional stateOutParser
 
 parserInfo ∷ ParserInfo CLIOptions

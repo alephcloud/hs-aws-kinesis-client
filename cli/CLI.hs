@@ -113,6 +113,13 @@ app = do
   CLIOptions{..} ← ask
   manager ← managedHttpManager
   credentials ← lift fetchCredentials
+  savedStreamState ←
+    for _clioStateIn $
+      either (fail ∘ ("Invalid saved state: " ++))  return
+        <=< fmap A.eitherDecode
+          ∘ liftIO
+          ∘ BL8.readFile
+
   consumer ← managedKinesisConsumer $ ConsumerKit
     { _ckKinesisKit = KinesisKit
         { _kkManager = manager
@@ -126,6 +133,7 @@ app = do
     , _ckStreamName = _clioStreamName
     , _ckBatchSize = 100
     , _ckIteratorType = _clioIteratorType
+    , _ckSavedStreamState = savedStreamState
     }
 
   lift $ consumerSource consumer $$
