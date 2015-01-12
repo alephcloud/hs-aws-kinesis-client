@@ -134,6 +134,11 @@ data ConsumerKit
 
   , _ckIteratorType ∷ !Kin.ShardIteratorType
   -- ^ The type of iterator to consume.
+
+  , _ckSavedStreamState ∷ !(Maybe SavedStreamState)
+  -- ^ Optionally, an initial stream state. The iterator type in
+  -- '_ckIteratorType' will be used for any shards not present in the saved
+  -- stream state; otherwise, 'Kin.AfterSequenceNumber' will be used.
   }
 
 -- | A lens for '_ckKinesisKit'.
@@ -155,6 +160,12 @@ ckBatchSize = lens _ckBatchSize $ \ck bs → ck { _ckBatchSize = bs }
 --
 ckIteratorType ∷ Lens' ConsumerKit Kin.ShardIteratorType
 ckIteratorType = lens _ckIteratorType $ \ck it → ck { _ckIteratorType = it }
+
+-- | A lens for '_ckSavedStreamState'.
+--
+ckSavedStreamState ∷ Lens' ConsumerKit (Maybe SavedStreamState)
+ckSavedStreamState = lens _ckSavedStreamState $ \ck ss → ck { _ckSavedStreamState = ss }
+
 
 type MessageQueueItem = (ShardState, Kin.Record)
 type StreamState = CR.Carousel ShardState
@@ -272,7 +283,8 @@ updateStreamState
   → m StreamState
 updateStreamState state = do
   streamName ← view ckStreamName
-  iteratorType ← view ckIteratorType
+  defaultIteratorType ← view ckIteratorType
+  savedState ← view ckSavedStreamState
 
   mapError KinesisError ∘ mapEnvironment ckKinesisKit $ do
     let existingShardIds = state ^. CR.clList <&> view ssShardId
@@ -283,10 +295,18 @@ updateStreamState state = do
 
     newShards ← shardSource $$ CL.consume
     shardStates ← forM newShards $ \Kin.Shard{..} → do
+      let startingSequenceNumber =
+            savedState ^? _Just ∘ _SavedStreamState ∘ ix shardShardId
+          iteratorType =
+            maybe
+              defaultIteratorType
+              (const Kin.AfterSequenceNumber)
+              startingSequenceNumber
+
       Kin.GetShardIteratorResponse it ← runKinesis Kin.GetShardIterator
         { Kin.getShardIteratorShardId = shardShardId
         , Kin.getShardIteratorShardIteratorType = iteratorType
-        , Kin.getShardIteratorStartingSequenceNumber = Nothing
+        , Kin.getShardIteratorStartingSequenceNumber = startingSequenceNumber
         , Kin.getShardIteratorStreamName = streamName
         }
       liftIO $ do
