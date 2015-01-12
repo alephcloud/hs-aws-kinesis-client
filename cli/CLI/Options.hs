@@ -34,7 +34,7 @@ module CLI.Options
 , clioLimit
 , clioIteratorType
 , clioAccessKeys
-, clioPrintState
+, clioStateOut
 , AccessKeys(..)
 , akAccessKeyId
 , akSecretAccessKey
@@ -63,7 +63,7 @@ data CLIOptions
   , _clioLimit ∷ !Int
   , _clioIteratorType ∷ !ShardIteratorType
   , _clioAccessKeys ∷ !(Either AccessKeys FilePath)
-  , _clioPrintState ∷ !Bool
+  , _clioStateOut ∷ !(Maybe FilePath)
   } deriving Show
 
 makeLenses ''AccessKeys
@@ -132,14 +132,12 @@ iteratorTypeParser =
     ⊕ value TrimHorizon
     ⊕ showDefault
 
-printStateParser ∷ Parser Bool
-printStateParser =
-  option auto $
-    long "print-state"
-    ⊕ help "Whether to print the last read sequence number for each shard upon termination"
-    ⊕ metavar "BOOL"
-    ⊕ value False
-    ⊕ showDefault
+stateOutParser ∷ Parser FilePath
+stateOutParser =
+  strOption $
+    long "out-state"
+    ⊕ help "Write the last known state of each shard to a file"
+    ⊕ metavar "FILE"
 
 optionsParser ∷ Parser CLIOptions
 optionsParser =
@@ -148,7 +146,7 @@ optionsParser =
     ⊛ limitParser
     ⊛ iteratorTypeParser
     ⊛ (Left <$> accessKeysParser <|> Right <$> accessKeysPathParser)
-    ⊛ printStateParser
+    ⊛ optional stateOutParser
 
 parserInfo ∷ ParserInfo CLIOptions
 parserInfo =

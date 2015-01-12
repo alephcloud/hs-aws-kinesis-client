@@ -66,6 +66,7 @@ import qualified Data.ByteString.Lazy.Char8 as BL8
 import Data.Conduit
 import qualified Data.Conduit.List as CL
 import qualified Data.Map as M
+import Data.Traversable
 import Data.Typeable
 
 import Options.Applicative
@@ -131,9 +132,9 @@ app = do
   lift $ consumerSource consumer $$
     limitConduit =$ CL.mapM_ (liftIO ∘ B8.putStrLn ∘ recordData)
 
-  when _clioPrintState $ do
+  void ∘ for _clioStateOut $ \outPath → do
     state ← lift $ M.toList <$> consumerStreamState consumer
-    liftIO ∘ BL8.putStrLn ∘ A.encode ∘ A.object ∘ flip fmap state $ \(sid, sn) →
+    liftIO ∘ BL8.writeFile outPath ∘ A.encode ∘ A.object ∘ flip fmap state $ \(sid, sn) →
         let A.String sid' = A.toJSON sid
         in sid' A..= sn
   return ()
