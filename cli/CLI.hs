@@ -41,14 +41,13 @@ module Main
 ) where
 
 import Aws
-import Aws.General
 import Aws.Kinesis hiding (Record)
 import Aws.Kinesis.Client.Common
 import Aws.Kinesis.Client.Consumer
 
 import CLI.Options
 
-import Control.Exception
+import Control.Exception.Lifted
 import Control.Lens
 import Control.Monad
 import Control.Monad.Trans
@@ -86,13 +85,6 @@ type MonadCLI m
     , MonadBaseControl IO m
     , MonadError ConsumerError m
     )
-
-limitConduit
-  ∷ MonadCLI m
-  ⇒ Conduit a m a
-limitConduit =
-  lift (view clioLimit) ≫=
-    CL.isolate
 
 fetchCredentials
   ∷ MonadCLI m
@@ -144,12 +136,17 @@ app = do
     , _ckSavedStreamState = savedStreamState
     }
 
-  lift $ consumerSource consumer $$
-    limitConduit =$ CL.mapM_ (liftIO ∘ B8.putStrLn ∘ recordData)
+  let
+    source = consumerSource consumer
+    presink = CL.mapM_ $ liftIO ∘ B8.putStrLn ∘ recordData
+    sink = case _clioLimit of
+      Just limit → CL.isolate limit =$ presink
+      Nothing → presink
 
-  void ∘ for _clioStateOut $ \outPath → do
-    state ← lift $ consumerStreamState consumer
-    liftIO ∘ BL8.writeFile outPath $ A.encode state
+  lift ∘ finally (source $$ sink) $
+    void ∘ for _clioStateOut $ \outPath → do
+      state ← consumerStreamState consumer
+      liftIO ∘ BL8.writeFile outPath $ A.encode state
 
 main ∷ IO ()
 main =

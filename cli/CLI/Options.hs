@@ -74,7 +74,7 @@ data CLIOptions
   = CLIOptions
   { _clioStreamName ∷ !StreamName
   , _clioRegion ∷ !Region
-  , _clioLimit ∷ !Int
+  , _clioLimit ∷ !(Maybe Int)
   , _clioIteratorType ∷ !ShardIteratorType
   , _clioAccessKeys ∷ !(Maybe CredentialsInput)
   , _clioUseInstanceMetadata ∷ !Bool
@@ -193,7 +193,7 @@ optionsParser =
   pure CLIOptions
     ⊛ streamNameParser
     ⊛ regionParser
-    ⊛ limitParser
+    ⊛ optional limitParser
     ⊛ iteratorTypeParser
     ⊛ optional credentialsInputParser
     ⊛ useInstanceMetadataParser
@@ -204,6 +204,6 @@ parserInfo ∷ ParserInfo CLIOptions
 parserInfo =
   info (helper ⊛ optionsParser) $
     fullDesc
-    ⊕ progDesc "Fetch a given number of records from a Kinesis stream; unlike the standard command line utilities, this interface is suitable for use with a sharded stream. If you both specify a saved stream state to be restored and an iterator type, the latter will be used on any shards which are not contained in the saved state. Minimally, you must specify your AWS credentials, a stream name, and a limit."
+    ⊕ progDesc "Fetch a given number of records from a Kinesis stream; unlike the standard command line utilities, this interface is suitable for use with a sharded stream. If you both specify a saved stream state to be restored and an iterator type, the latter will be used on any shards which are not contained in the saved state. Minimally, you must specify your AWS credentials, a stream name, and an optional limit."
     ⊕ header "The Kinesis Consumer CLI v0.2.0.1"
 
