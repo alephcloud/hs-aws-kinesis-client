@@ -1,3 +1,18 @@
+### v0.2.0.1
+
+All changes were in the Consumer CLI.
+
+- Add switch to get credentials from EC2 instance metadata,
+  --use-instance-metadata
+
+- Make --limit optional to consume indefinitely
+
+- Allow custom region with --region
+
+- If the CLI is terminated for any reason, before shutting down it will record
+  its state if --save-state is passed
+
+
 ### v0.2.0.0
 
 - [Consumer] Add the ability to save & restore stream state (i.e. last consumed
