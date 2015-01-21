@@ -136,7 +136,7 @@ app = do
              , credentials = credentials
              , logger = defaultLog Warning
              }
-        , _kkKinesisConfiguration = KinesisConfiguration UsWest2
+        , _kkKinesisConfiguration = KinesisConfiguration _clioRegion
         }
     , _ckStreamName = _clioStreamName
     , _ckBatchSize = 100

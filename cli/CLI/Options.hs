@@ -37,6 +37,7 @@ module CLI.Options
 , clioStateIn
 , clioStateOut
 , clioUseInstanceMetadata
+, clioRegion
 , CredentialsInput(..)
 , AccessKeys(..)
 , akAccessKeyId
@@ -45,13 +46,17 @@ module CLI.Options
 , parserInfo
 ) where
 
+import Aws.General
 import Aws.Kinesis
 import qualified Data.ByteString.Char8 as B8
 import Control.Applicative.Unicode
 import Control.Lens
+import Control.Monad.Unicode
 import Data.Monoid.Unicode
+import qualified Data.Text as T
 import qualified Data.Text.Lens as T
 import Options.Applicative
+import Options.Applicative.Types
 import Prelude.Unicode
 
 data AccessKeys
@@ -68,6 +73,7 @@ data CredentialsInput
 data CLIOptions
   = CLIOptions
   { _clioStreamName ∷ !StreamName
+  , _clioRegion ∷ !Region
   , _clioLimit ∷ !Int
   , _clioIteratorType ∷ !ShardIteratorType
   , _clioAccessKeys ∷ !(Maybe CredentialsInput)
@@ -169,10 +175,24 @@ useInstanceMetadataParser =
     long "use-instance-metadata"
     ⊕ help "Read the credentials from the instance metadata"
 
+regionReader ∷ ReadM Region
+regionReader = do
+  fromText ∘ T.pack <$> readerAsk ≫=
+    either readerError return
+
+
+regionParser ∷ Parser Region
+regionParser =
+  option regionReader $
+    long "region"
+    ⊕ value UsWest2
+    ⊕ help "Choose an AWS Kinesis region (default: us-west-2)"
+
 optionsParser ∷ Parser CLIOptions
 optionsParser =
   pure CLIOptions
     ⊛ streamNameParser
+    ⊛ regionParser
     ⊛ limitParser
     ⊛ iteratorTypeParser
     ⊛ optional credentialsInputParser
@@ -185,5 +205,5 @@ parserInfo =
   info (helper ⊛ optionsParser) $
     fullDesc
     ⊕ progDesc "Fetch a given number of records from a Kinesis stream; unlike the standard command line utilities, this interface is suitable for use with a sharded stream. If you both specify a saved stream state to be restored and an iterator type, the latter will be used on any shards which are not contained in the saved state. Minimally, you must specify your AWS credentials, a stream name, and a limit."
-    ⊕ header "The Kinesis Consumer CLI"
+    ⊕ header "The Kinesis Consumer CLI v0.2.0.1"
 
