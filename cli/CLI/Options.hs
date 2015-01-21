@@ -36,6 +36,9 @@ module CLI.Options
 , clioAccessKeys
 , clioStateIn
 , clioStateOut
+, clioUseInstanceMetadata
+, clioRegion
+, CredentialsInput(..)
 , AccessKeys(..)
 , akAccessKeyId
 , akSecretAccessKey
@@ -43,13 +46,17 @@ module CLI.Options
 , parserInfo
 ) where
 
+import Aws.General
 import Aws.Kinesis
 import qualified Data.ByteString.Char8 as B8
 import Control.Applicative.Unicode
 import Control.Lens
+import Control.Monad.Unicode
 import Data.Monoid.Unicode
+import qualified Data.Text as T
 import qualified Data.Text.Lens as T
 import Options.Applicative
+import Options.Applicative.Types
 import Prelude.Unicode
 
 data AccessKeys
@@ -58,12 +65,19 @@ data AccessKeys
   , _akSecretAccessKey ∷ !B8.ByteString
   } deriving Show
 
+data CredentialsInput
+  = CredentialsFromAccessKeys AccessKeys
+  | CredentialsFromFile FilePath
+  deriving Show
+
 data CLIOptions
   = CLIOptions
   { _clioStreamName ∷ !StreamName
-  , _clioLimit ∷ !Int
+  , _clioRegion ∷ !Region
+  , _clioLimit ∷ !(Maybe Int)
   , _clioIteratorType ∷ !ShardIteratorType
-  , _clioAccessKeys ∷ !(Either AccessKeys FilePath)
+  , _clioAccessKeys ∷ !(Maybe CredentialsInput)
+  , _clioUseInstanceMetadata ∷ !Bool
   , _clioStateIn ∷ !(Maybe FilePath)
   , _clioStateOut ∷ !(Maybe FilePath)
   } deriving Show
@@ -148,13 +162,41 @@ stateInParser =
     ⊕ help "Read a saved stream state from a file. For any shards whose state is restored, the 'AFTER_SEQUENCE_NUMBER' iterator type will be used; other shards will use the iterator type you have specified. Some shards may have been merged or closed between when the state was saved and restored; at this point, no effort has been made to do anything here beyond the obvious (shards are identified by their shard-id)."
     ⊕ metavar "FILE"
 
+credentialsInputParser ∷ Parser CredentialsInput
+credentialsInputParser =
+  foldr (<|>) empty $
+    [ CredentialsFromAccessKeys <$> accessKeysParser
+    , CredentialsFromFile <$> accessKeysPathParser
+    ]
+
+useInstanceMetadataParser ∷ Parser Bool
+useInstanceMetadataParser =
+  switch $
+    long "use-instance-metadata"
+    ⊕ help "Read the credentials from the instance metadata"
+
+regionReader ∷ ReadM Region
+regionReader = do
+  fromText ∘ T.pack <$> readerAsk ≫=
+    either readerError return
+
+
+regionParser ∷ Parser Region
+regionParser =
+  option regionReader $
+    long "region"
+    ⊕ value UsWest2
+    ⊕ help "Choose an AWS Kinesis region (default: us-west-2)"
+
 optionsParser ∷ Parser CLIOptions
 optionsParser =
   pure CLIOptions
     ⊛ streamNameParser
-    ⊛ limitParser
+    ⊛ regionParser
+    ⊛ optional limitParser
     ⊛ iteratorTypeParser
-    ⊛ (Left <$> accessKeysParser <|> Right <$> accessKeysPathParser)
+    ⊛ optional credentialsInputParser
+    ⊛ useInstanceMetadataParser
     ⊛ optional stateInParser
     ⊛ optional stateOutParser
 
@@ -162,6 +204,6 @@ parserInfo ∷ ParserInfo CLIOptions
 parserInfo =
   info (helper ⊛ optionsParser) $
     fullDesc
-    ⊕ progDesc "Fetch a given number of records from a Kinesis stream; unlike the standard command line utilities, this interface is suitable for use with a sharded stream. If you both specify a saved stream state to be restored and an iterator type, the latter will be used on any shards which are not contained in the saved state. Minimally, you must specify your AWS credentials, a stream name, and a limit."
-    ⊕ header "The Kinesis Consumer CLI"
+    ⊕ progDesc "Fetch a given number of records from a Kinesis stream; unlike the standard command line utilities, this interface is suitable for use with a sharded stream. If you both specify a saved stream state to be restored and an iterator type, the latter will be used on any shards which are not contained in the saved state. Minimally, you must specify your AWS credentials, a stream name, and an optional limit."
+    ⊕ header "The Kinesis Consumer CLI v0.2.0.1"
 
