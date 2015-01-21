@@ -36,6 +36,8 @@ module CLI.Options
 , clioAccessKeys
 , clioStateIn
 , clioStateOut
+, clioUseInstanceMetadata
+, CredentialsInput(..)
 , AccessKeys(..)
 , akAccessKeyId
 , akSecretAccessKey
@@ -58,12 +60,18 @@ data AccessKeys
   , _akSecretAccessKey ∷ !B8.ByteString
   } deriving Show
 
+data CredentialsInput
+  = CredentialsFromAccessKeys AccessKeys
+  | CredentialsFromFile FilePath
+  deriving Show
+
 data CLIOptions
   = CLIOptions
   { _clioStreamName ∷ !StreamName
   , _clioLimit ∷ !Int
   , _clioIteratorType ∷ !ShardIteratorType
-  , _clioAccessKeys ∷ !(Either AccessKeys FilePath)
+  , _clioAccessKeys ∷ !(Maybe CredentialsInput)
+  , _clioUseInstanceMetadata ∷ !Bool
   , _clioStateIn ∷ !(Maybe FilePath)
   , _clioStateOut ∷ !(Maybe FilePath)
   } deriving Show
@@ -148,13 +156,27 @@ stateInParser =
     ⊕ help "Read a saved stream state from a file. For any shards whose state is restored, the 'AFTER_SEQUENCE_NUMBER' iterator type will be used; other shards will use the iterator type you have specified. Some shards may have been merged or closed between when the state was saved and restored; at this point, no effort has been made to do anything here beyond the obvious (shards are identified by their shard-id)."
     ⊕ metavar "FILE"
 
+credentialsInputParser ∷ Parser CredentialsInput
+credentialsInputParser =
+  foldr (<|>) empty $
+    [ CredentialsFromAccessKeys <$> accessKeysParser
+    , CredentialsFromFile <$> accessKeysPathParser
+    ]
+
+useInstanceMetadataParser ∷ Parser Bool
+useInstanceMetadataParser =
+  switch $
+    long "use-instance-metadata"
+    ⊕ help "Read the credentials from the instance metadata"
+
 optionsParser ∷ Parser CLIOptions
 optionsParser =
   pure CLIOptions
     ⊛ streamNameParser
     ⊛ limitParser
     ⊛ iteratorTypeParser
-    ⊛ (Left <$> accessKeysParser <|> Right <$> accessKeysPathParser)
+    ⊛ optional credentialsInputParser
+    ⊛ useInstanceMetadataParser
     ⊛ optional stateInParser
     ⊛ optional stateOutParser
 

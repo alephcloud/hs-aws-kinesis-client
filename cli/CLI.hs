@@ -75,6 +75,7 @@ import Control.Monad.Unicode
 
 data CLIError
   = MissingCredentials
+  | NoInstanceMetadataCredentials
   deriving (Typeable, Show)
 
 instance Exception CLIError
@@ -97,14 +98,21 @@ fetchCredentials
   ∷ MonadCLI m
   ⇒ m Credentials
 fetchCredentials = do
-  view clioAccessKeys ≫= \case
-    Left aks →
-      makeCredentials
-        (aks ^. akAccessKeyId)
-        (aks ^. akSecretAccessKey)
-    Right path →
-      loadCredentialsFromFile path credentialsDefaultKey
-        <!?> KinesisError (toException MissingCredentials)
+  view clioUseInstanceMetadata ≫= \case
+    True →
+      loadCredentialsFromInstanceMetadata
+        <!?> KinesisError (toException NoInstanceMetadataCredentials)
+    False →
+      view clioAccessKeys ≫= \case
+        Just (CredentialsFromAccessKeys aks) →
+          makeCredentials
+            (aks ^. akAccessKeyId)
+            (aks ^. akSecretAccessKey)
+        Just (CredentialsFromFile path) →
+          loadCredentialsFromFile path credentialsDefaultKey
+            <!?> KinesisError (toException MissingCredentials)
+        Nothing →
+          throwError $ KinesisError (toException MissingCredentials)
 
 app
   ∷ MonadCLI m
