@@ -58,19 +58,21 @@ import Control.Monad.Reader.Class
 import Control.Monad.Trans.Reader (ReaderT(..))
 import Control.Monad.Error.Class
 import Control.Monad.Error.Hoist
+import Control.Monad.Unicode
 
 import qualified Data.Aeson as A
 import qualified Data.ByteString.Char8 as B8
 import qualified Data.ByteString.Lazy.Char8 as BL8
 import Data.Conduit
 import qualified Data.Conduit.List as CL
+import Data.Monoid.Unicode
 import Data.Traversable
 import Data.Typeable
 
 import Options.Applicative
 import qualified Network.HTTP.Conduit as HC
 import Prelude.Unicode
-import Control.Monad.Unicode
+import System.IO.Error
 
 data CLIError
   = MissingCredentials
@@ -114,11 +116,15 @@ app = do
   manager ← managedHttpManager
   credentials ← lift fetchCredentials
   savedStreamState ←
-    for _clioStateIn $
-      either (fail ∘ ("Invalid saved state: " ++))  return
-        <=< fmap A.eitherDecode
-          ∘ liftIO
-          ∘ BL8.readFile
+    case _clioStateIn of
+      Just path → liftIO $ do
+        code ← catch (Just <$> BL8.readFile path) $ \case
+          exn
+            | isDoesNotExistError exn → return Nothing
+            | otherwise → throw exn
+        traverse (either (fail ∘ ("Invalid saved state: " ⊕)) return) $
+          A.eitherDecode <$> code
+      Nothing → return Nothing
 
   consumer ← managedKinesisConsumer $ ConsumerKit
     { _ckKinesisKit = KinesisKit
