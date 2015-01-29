@@ -72,7 +72,6 @@ module Aws.Kinesis.Client.Producer
 ) where
 
 import qualified Aws.Kinesis as Kin
-import qualified Aws.Kinesis.Commands.PutRecords as Kin
 import Aws.Kinesis.Client.Common
 
 import Control.Applicative
