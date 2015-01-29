@@ -1,3 +1,13 @@
+### v0.2.0.2
+
+- Upgrade to newer versions of `aws-general` and `aws-kinesis` which support the
+  security token header (necessary for using credentials from EC2 instance
+  metadata). The --use-instance-metadata option should now work properly.
+
+- When --restore-state is passed with a non-existent file, it will be ignored;
+  if it is passed with a malformed file, an error will be thrown; the old
+  behavior was to throw an error in either case.
+
 ### v0.2.0.1
 
 All changes were in the Consumer CLI.
