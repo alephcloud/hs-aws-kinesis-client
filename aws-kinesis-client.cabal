@@ -1,5 +1,5 @@
 name:                aws-kinesis-client
-version:             0.2.0.2
+version:             0.2.0.3
 synopsis:            A producer & consumer client library for AWS Kinesis
 -- description:
 license:             Apache-2.0
@@ -71,6 +71,7 @@ executable kinesis-cli
                        http-conduit >=2.1.5,
                        kan-extensions >=4.2,
                        lens >=4.7,
+                       lifted-async >=0.3.0,
                        lifted-base >=0.2.3.3,
                        monad-control >=0.3.3.0,
                        mtl >=2.2.1,

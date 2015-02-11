@@ -26,6 +26,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE TupleSections #-}
 {-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE UnicodeSyntax #-}
 
@@ -47,6 +48,8 @@ import Aws.Kinesis.Client.Consumer
 
 import CLI.Options
 
+import Control.Concurrent.Lifted
+import Control.Concurrent.Async.Lifted
 import Control.Exception.Lifted
 import Control.Lens
 import Control.Monad
@@ -126,7 +129,7 @@ app = do
           A.eitherDecode <$> code
       Nothing → return Nothing
 
-  consumer ← managedKinesisConsumer $ ConsumerKit
+  consumer ← managedKinesisConsumer ConsumerKit
     { _ckKinesisKit = KinesisKit
         { _kkManager = manager
         , _kkConfiguration = Configuration
@@ -144,15 +147,30 @@ app = do
 
   let
     source = consumerSource consumer
-    presink = CL.mapM_ $ liftIO ∘ B8.putStrLn ∘ recordData
+    step n r = succ n <$ liftIO (B8.putStrLn $ recordData r)
+    countingSink = CL.foldM step (1 ∷ Int)
     sink = case _clioLimit of
-      Just limit → CL.isolate limit =$ presink
-      Nothing → presink
+      Just limit → CL.isolate limit =$ countingSink
+      Nothing → countingSink
 
-  lift ∘ finally (source $$ sink) $
-    void ∘ for _clioStateOut $ \outPath → do
-      state ← consumerStreamState consumer
-      liftIO ∘ BL8.writeFile outPath $ A.encode state
+    runConsumer = do
+      n ← catch (source $$ sink) $ \SomeException{} → return 0
+      return $ maybe True (n ≥) _clioLimit
+
+
+  result ← lift $
+    case _clioTimeout of
+      Just seconds → race (threadDelay $ seconds * 1000000) runConsumer
+      Nothing → Right <$> runConsumer
+
+  let
+    successful = case result of
+      Left () → isn't _Just _clioLimit
+      Right b → b
+
+  lift ∘ when successful ∘ void ∘ for _clioStateOut $ \outPath → do
+    state ← consumerStreamState consumer
+    liftIO ∘ BL8.writeFile outPath $ A.encode state
 
 main ∷ IO ()
 main =

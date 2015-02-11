@@ -1,3 +1,15 @@
+### v0.2.0.3
+
+All changes were in the Consumer CLI.
+
+- Add a --timeout option, which will cause the consumer CLI terminate after a
+  specified number of seconds.
+
+- Change the behavior of --save-state to only save the state when a run of the
+  consumer CLI was successful (i.e. either no limit was specified, or the
+  precise number of items requested was indeed retrieved within the alotted time).
+
+
 ### v0.2.0.2
 
 - Upgrade to newer versions of `aws-general` and `aws-kinesis` which support the
