@@ -136,7 +136,7 @@ limitParser =
     long "limit"
     ⊕ short 'l'
     ⊕ metavar "L"
-    ⊕ help "Fetch `L` records"
+    ⊕ help "Fetch `L` records. If a limit is provided, then the run will only be considered successful if it results in the CLI fetching `L` records; otherwise, a run is always considered successful."
 
 iteratorTypeParser ∷ Parser ShardIteratorType
 iteratorTypeParser =
@@ -152,7 +152,7 @@ stateOutParser ∷ Parser FilePath
 stateOutParser =
   strOption $
     long "save-state"
-    ⊕ help "Write the last known state of each shard to a file"
+    ⊕ help "Write the last known state of each shard to a file; this will only occur when the run has completed in a \"successful\" state."
     ⊕ metavar "FILE"
 
 stateInParser ∷ Parser FilePath

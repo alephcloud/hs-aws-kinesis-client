@@ -26,6 +26,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE TupleSections #-}
 {-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE UnicodeSyntax #-}
 
@@ -144,15 +145,19 @@ app = do
 
   let
     source = consumerSource consumer
-    presink = CL.mapM_ $ liftIO ∘ B8.putStrLn ∘ recordData
+    step n r = succ n <$ liftIO (B8.putStrLn $ recordData r)
+    countingSink = CL.foldM step (1 ∷ Int)
     sink = case _clioLimit of
-      Just limit → CL.isolate limit =$ presink
-      Nothing → presink
+      Just limit → CL.isolate limit =$ countingSink
+      Nothing → countingSink
 
-  lift ∘ finally (source $$ sink) $
-    void ∘ for _clioStateOut $ \outPath → do
-      state ← consumerStreamState consumer
-      liftIO ∘ BL8.writeFile outPath $ A.encode state
+  successful ← do
+    n ← lift ∘ catch (source $$ sink) $ \SomeException{} → return 0
+    return $ maybe True (n ≥) _clioLimit
+
+  lift ∘ when successful ∘ void ∘ for _clioStateOut $ \outPath → do
+    state ← consumerStreamState consumer
+    liftIO ∘ BL8.writeFile outPath $ A.encode state
 
 main ∷ IO ()
 main =
