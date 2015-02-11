@@ -126,7 +126,7 @@ app = do
           A.eitherDecode <$> code
       Nothing → return Nothing
 
-  consumer ← managedKinesisConsumer $ ConsumerKit
+  consumer ← managedKinesisConsumer ConsumerKit
     { _ckKinesisKit = KinesisKit
         { _kkManager = manager
         , _kkConfiguration = Configuration
