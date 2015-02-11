@@ -48,6 +48,8 @@ import Aws.Kinesis.Client.Consumer
 
 import CLI.Options
 
+import Control.Concurrent.Lifted
+import Control.Concurrent.Async.Lifted
 import Control.Exception.Lifted
 import Control.Lens
 import Control.Monad
@@ -151,9 +153,20 @@ app = do
       Just limit → CL.isolate limit =$ countingSink
       Nothing → countingSink
 
-  successful ← do
-    n ← lift ∘ catch (source $$ sink) $ \SomeException{} → return 0
-    return $ maybe True (n ≥) _clioLimit
+    runConsumer = do
+      n ← catch (source $$ sink) $ \SomeException{} → return 0
+      return $ maybe True (n ≥) _clioLimit
+
+
+  result ← lift $
+    case _clioTimeout of
+      Just seconds → race (threadDelay $ seconds * 1000000) runConsumer
+      Nothing → Right <$> runConsumer
+
+  let
+    successful = case result of
+      Left () → isn't _Just _clioLimit
+      Right b → b
 
   lift ∘ when successful ∘ void ∘ for _clioStateOut $ \outPath → do
     state ← consumerStreamState consumer
