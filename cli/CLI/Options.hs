@@ -32,6 +32,7 @@ module CLI.Options
 ( CLIOptions(..)
 , clioStreamName
 , clioLimit
+, clioTimeout
 , clioIteratorType
 , clioAccessKeys
 , clioStateIn
@@ -75,6 +76,7 @@ data CLIOptions
   { _clioStreamName ∷ !StreamName
   , _clioRegion ∷ !Region
   , _clioLimit ∷ !(Maybe Int)
+  , _clioTimeout ∷ !(Maybe Int)
   , _clioIteratorType ∷ !ShardIteratorType
   , _clioAccessKeys ∷ !(Maybe CredentialsInput)
   , _clioUseInstanceMetadata ∷ !Bool
@@ -138,6 +140,14 @@ limitParser =
     ⊕ metavar "L"
     ⊕ help "Fetch `L` records. If a limit is provided, then the run will only be considered successful if it results in the CLI fetching `L` records; otherwise, a run is always considered successful."
 
+timeoutParser ∷ Parser Int
+timeoutParser =
+  option auto $
+    long "timeout"
+    ⊕ short 't'
+    ⊕ metavar "T"
+    ⊕ help "Terminate the consumer after `T` seconds. Even if a limit has been provided, the consumer will terminate after at most `T` seconds."
+
 iteratorTypeParser ∷ Parser ShardIteratorType
 iteratorTypeParser =
   option auto $
@@ -194,6 +204,7 @@ optionsParser =
     ⊛ streamNameParser
     ⊛ regionParser
     ⊛ optional limitParser
+    ⊛ optional timeoutParser
     ⊛ iteratorTypeParser
     ⊛ optional credentialsInputParser
     ⊛ useInstanceMetadataParser
@@ -204,6 +215,6 @@ parserInfo ∷ ParserInfo CLIOptions
 parserInfo =
   info (helper ⊛ optionsParser) $
     fullDesc
-    ⊕ progDesc "Fetch a given number of records from a Kinesis stream; unlike the standard command line utilities, this interface is suitable for use with a sharded stream. If you both specify a saved stream state to be restored and an iterator type, the latter will be used on any shards which are not contained in the saved state. Minimally, you must specify your AWS credentials, a stream name, and an optional limit."
+    ⊕ progDesc "Fetch a given number of records from a Kinesis stream; unlike the standard command line utilities, this interface is suitable for use with a sharded stream. If you both specify a saved stream state to be restored and an iterator type, the latter will be used on any shards which are not contained in the saved state. Minimally, you must specify your AWS credentials, a stream name, and an optional limit & timeout."
     ⊕ header "The Kinesis Consumer CLI v0.2.0.1"
 
