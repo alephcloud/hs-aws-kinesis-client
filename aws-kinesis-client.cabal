@@ -1,5 +1,5 @@
 name:                aws-kinesis-client
-version:             0.2.0.3
+version:             0.3.0.0
 synopsis:            A producer & consumer client library for AWS Kinesis
 -- description:
 license:             Apache-2.0

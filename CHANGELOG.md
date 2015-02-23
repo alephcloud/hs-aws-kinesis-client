@@ -1,3 +1,12 @@
+### v0.3.0.0
+
+All changes were in the Producer client.
+
+- Do not retry messages indefinitely; add support for a configurable retry
+  policy.
+
+- Reject messages synchronously which exceed the Kinesis record size limit.
+
 ### v0.2.0.3
 
 All changes were in the Consumer CLI.
