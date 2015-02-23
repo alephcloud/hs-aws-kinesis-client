@@ -144,7 +144,11 @@ type Message = T.Text
 data MessageQueueItem
   = MessageQueueItem
   { _mqiMessage ∷ !Message
+  -- ^ The contents of the message
+
   , _mqiPartitionKey ∷ !Kin.PartitionKey
+  -- ^ The partition key the message is destined for
+
   } deriving (Eq, Show)
 
 mqiMessage ∷ Lens' MessageQueueItem Message
