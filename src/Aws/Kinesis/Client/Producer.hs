@@ -56,6 +56,7 @@ module Aws.Kinesis.Client.Producer
 , pkKinesisKit
 , pkStreamName
 , pkBatchPolicy
+, pkRetryPolicy
 , pkMessageQueueBounds
 , pkMaxConcurrency
 
@@ -68,6 +69,11 @@ module Aws.Kinesis.Client.Producer
 , defaultBatchPolicy
 , bpBatchSize
 , bpEndpoint
+
+, RetryPolicy
+, defaultRetryPolicy
+, rpRetryCount
+
 , RecordEndpoint(..)
 ) where
 
@@ -129,7 +135,7 @@ bpBatchSize = lens _bpBatchSize $ \bp bs → bp { _bpBatchSize = bs }
 bpEndpoint ∷ Lens' BatchPolicy RecordEndpoint
 bpEndpoint = lens _bpEndpoint $ \bp ep → bp { _bpEndpoint = ep }
 
--- | The default batching policy sends '200' records per 'PutRecordsEndpoint'
+-- | The default batching policy sends @200@ records per 'PutRecordsEndpoint'
 -- request.
 --
 defaultBatchPolicy ∷ BatchPolicy
@@ -138,13 +144,39 @@ defaultBatchPolicy = BatchPolicy
   , _bpEndpoint = PutRecordsEndpoint
   }
 
+-- | The producer will attempt to re-send records which failed according to a
+-- user-specified policy. This policy applies to failures which occur in the
+-- process of sending a message to Kinesis, not those which occur in the course
+-- of enqueuing a message.
+data RetryPolicy
+  = RetryPolicy
+  { _rpRetryCount ∷ {-# UNPACK #-} !Int
+  } deriving (Eq, Show)
+
+-- | The number of times to retry sending a message after it has first failed.
+--
+rpRetryCount ∷ Lens' RetryPolicy Int
+rpRetryCount = lens _rpRetryCount $ \rp n → rp { _rpRetryCount = n }
+
+-- | The default retry policy will attempt @5@ retries for a message.
+--
+defaultRetryPolicy ∷ RetryPolicy
+defaultRetryPolicy = RetryPolicy
+  { _rpRetryCount = 5
+  }
 
 type Message = T.Text
 
 data MessageQueueItem
   = MessageQueueItem
   { _mqiMessage ∷ !Message
+  -- ^ The contents of the message
+
   , _mqiPartitionKey ∷ !Kin.PartitionKey
+  -- ^ The partition key the message is destined for
+
+  , _mqiRemainingAttempts ∷ !Int
+  -- ^ The number of times remaining to try and publish this message
   } deriving (Eq, Show)
 
 mqiMessage ∷ Lens' MessageQueueItem Message
@@ -152,6 +184,15 @@ mqiMessage = lens _mqiMessage $ \i m → i { _mqiMessage = m }
 
 mqiPartitionKey ∷ Lens' MessageQueueItem Kin.PartitionKey
 mqiPartitionKey = lens _mqiPartitionKey $ \i s → i { _mqiPartitionKey = s }
+
+mqiRemainingAttempts ∷ Lens' MessageQueueItem Int
+mqiRemainingAttempts = lens _mqiRemainingAttempts $ \i n → i { _mqiRemainingAttempts = n }
+
+messageQueueItemIsEligible
+  ∷ MessageQueueItem
+  → Bool
+messageQueueItemIsEligible =
+  (≥ 1) ∘ _mqiRemainingAttempts
 
 -- | The basic input required to construct a Kinesis producer.
 --
@@ -165,6 +206,9 @@ data ProducerKit
 
   , _pkBatchPolicy ∷ !BatchPolicy
   -- ^ The record batching policy for the producer.
+
+  , _pkRetryPolicy ∷ !RetryPolicy
+  -- ^ The retry policy for the producer.
 
   , _pkMessageQueueBounds ∷ {-# UNPACK #-} !Int
   -- ^ The maximum number of records that may be enqueued at one time.
@@ -188,6 +232,11 @@ pkStreamName = lens _pkStreamName $ \pk sn → pk { _pkStreamName = sn }
 pkBatchPolicy ∷ Lens' ProducerKit BatchPolicy
 pkBatchPolicy = lens _pkBatchPolicy $ \pk bp → pk { _pkBatchPolicy = bp }
 
+-- | A lens for '_pkRetryPolicy'.
+--
+pkRetryPolicy ∷ Lens' ProducerKit RetryPolicy
+pkRetryPolicy = lens _pkRetryPolicy $ \pk rp → pk { _pkRetryPolicy = rp }
+
 -- | A lens for '_pkMessageQueueBounds'.
 --
 pkMessageQueueBounds ∷ Lens' ProducerKit Int
@@ -200,13 +249,17 @@ pkMaxConcurrency = lens _pkMaxConcurrency $ \pk n → pk { _pkMaxConcurrency = n
 
 -- | The (abstract) Kinesis producer client.
 --
-newtype KinesisProducer
+data KinesisProducer
   = KinesisProducer
-  { _kpMessageQueue ∷ TBMQueue MessageQueueItem
+  { _kpMessageQueue ∷ !(TBMQueue MessageQueueItem)
+  , _kpRetryPolicy ∷ !RetryPolicy
   }
 
 kpMessageQueue ∷ Getter KinesisProducer (TBMQueue MessageQueueItem)
 kpMessageQueue = to _kpMessageQueue
+
+kpRetryPolicy ∷ Getter KinesisProducer RetryPolicy
+kpRetryPolicy = to _kpRetryPolicy
 
 data ProducerError
   = KinesisError !SomeException
@@ -375,17 +428,18 @@ putRecordSink = do
             putStrLn $ "Error: " ++ show e
             putStrLn "Will wait 5s"
             threadDelay 5000000
-          leftover item
+          leftover $ item & mqiRemainingAttempts -~ 1
 
-    handleError handler $ do
-      let partitionKey = item ^. mqiPartitionKey
-      void ∘ lift ∘ liftKinesis $ runKinesis Kin.PutRecord
-        { Kin.putRecordData = item ^. mqiMessage ∘ to T.encodeUtf8
-        , Kin.putRecordExplicitHashKey = Nothing
-        , Kin.putRecordPartitionKey = partitionKey
-        , Kin.putRecordSequenceNumberForOrdering = Nothing
-        , Kin.putRecordStreamName = streamName
-        }
+    when (messageQueueItemIsEligible item) $
+      handleError handler $ do
+        let partitionKey = item ^. mqiPartitionKey
+        void ∘ lift ∘ liftKinesis $ runKinesis Kin.PutRecord
+          { Kin.putRecordData = item ^. mqiMessage ∘ to T.encodeUtf8
+          , Kin.putRecordExplicitHashKey = Nothing
+          , Kin.putRecordPartitionKey = partitionKey
+          , Kin.putRecordSequenceNumberForOrdering = Nothing
+          , Kin.putRecordStreamName = streamName
+          }
 
 splitEvery
   ∷ Int
@@ -408,31 +462,34 @@ putRecordsSink = do
   maxWorkerCount ← view pkMaxConcurrency
   awaitForever $ \messages → do
     let batches = splitEvery batchSize messages
-    leftovers ← lift ∘ flip (mapConcurrentlyN maxWorkerCount 100) batches $ \ms → do
-      let handler e = do
-            liftIO $ print e
-            return ms
+    leftovers ← lift ∘ flip (mapConcurrentlyN maxWorkerCount 100) batches $ \items → do
+      case filter messageQueueItemIsEligible items of
+        [] → return []
+        eligibleItems → do
+          handleError (\e → eligibleItems <$ liftIO (print e)) $ do
+            requestEntries ← for eligibleItems $ \m → do
+              let partitionKey = m ^. mqiPartitionKey
+              return Kin.PutRecordsRequestEntry
+                { Kin.putRecordsRequestEntryData = m ^. mqiMessage ∘ to T.encodeUtf8
+                , Kin.putRecordsRequestEntryExplicitHashKey = Nothing
+                , Kin.putRecordsRequestEntryPartitionKey = partitionKey
+                }
 
-      handleError handler $ do
-        items ← for ms $ \m → do
-          let partitionKey = m ^. mqiPartitionKey
-          return Kin.PutRecordsRequestEntry
-            { Kin.putRecordsRequestEntryData = m ^. mqiMessage ∘ to T.encodeUtf8
-            , Kin.putRecordsRequestEntryExplicitHashKey = Nothing
-            , Kin.putRecordsRequestEntryPartitionKey = partitionKey
-            }
+            Kin.PutRecordsResponse{..} ←  liftKinesis $ runKinesis Kin.PutRecords
+              { Kin.putRecordsRecords = requestEntries
+              , Kin.putRecordsStreamName = streamName
+              }
+            let
+              processResult m m'
+                | isJust (Kin.putRecordsResponseRecordErrorCode m') = Just m
+                | otherwise = Nothing
+            return ∘ catMaybes $ zipWith processResult eligibleItems putRecordsResponseRecords
 
-        Kin.PutRecordsResponse{..} ←  liftKinesis $ runKinesis Kin.PutRecords
-          { Kin.putRecordsRecords = items
-          , Kin.putRecordsStreamName = streamName
-          }
-        let processResult m m'
-              | isJust (Kin.putRecordsResponseRecordErrorCode m') = Just m
-              | otherwise = Nothing
-        return ∘ catMaybes $ zipWith processResult ms putRecordsResponseRecords
-
-    forM_ leftovers $ \mss →
-      unless (null mss) $ leftover mss
+    forM_ leftovers $ \items →
+      unless (null items) $
+        leftover $ items
+          <&> mqiRemainingAttempts -~ 1
+           & filter messageQueueItemIsEligible
 
 sendMessagesSink
   ∷ MonadProducerInternal m
@@ -458,6 +515,7 @@ writeProducer producer !msg = do
     tryWriteTBMQueue (producer ^. kpMessageQueue) MessageQueueItem
       { _mqiMessage = msg
       , _mqiPartitionKey = generatePartitionKey gen
+      , _mqiRemainingAttempts = producer ^. kpRetryPolicy . rpRetryCount . to succ
       }
   case result of
     Just True → return ()
@@ -516,7 +574,10 @@ managedKinesisProducer kit = do
 
   Codensity $ \inner → do
     link consumerHandle
-    res ← inner $ KinesisProducer messageQueue
+    res ← inner KinesisProducer
+      { _kpMessageQueue = messageQueue
+      , _kpRetryPolicy = kit ^. pkRetryPolicy
+      }
     () ← wait consumerHandle
     return res
 
