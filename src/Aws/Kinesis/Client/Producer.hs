@@ -56,6 +56,7 @@ module Aws.Kinesis.Client.Producer
 , pkKinesisKit
 , pkStreamName
 , pkBatchPolicy
+, pkRetryPolicy
 , pkMessageQueueBounds
 , pkMaxConcurrency
 
@@ -68,6 +69,11 @@ module Aws.Kinesis.Client.Producer
 , defaultBatchPolicy
 , bpBatchSize
 , bpEndpoint
+
+, RetryPolicy
+, defaultRetryPolicy
+, rpRetryCount
+
 , RecordEndpoint(..)
 ) where
 
@@ -129,7 +135,7 @@ bpBatchSize = lens _bpBatchSize $ \bp bs → bp { _bpBatchSize = bs }
 bpEndpoint ∷ Lens' BatchPolicy RecordEndpoint
 bpEndpoint = lens _bpEndpoint $ \bp ep → bp { _bpEndpoint = ep }
 
--- | The default batching policy sends '200' records per 'PutRecordsEndpoint'
+-- | The default batching policy sends @200@ records per 'PutRecordsEndpoint'
 -- request.
 --
 defaultBatchPolicy ∷ BatchPolicy
@@ -138,6 +144,26 @@ defaultBatchPolicy = BatchPolicy
   , _bpEndpoint = PutRecordsEndpoint
   }
 
+-- | The producer will attempt to re-send records which failed according to a
+-- user-specified policy. This policy applies to failures which occur in the
+-- process of sending a message to Kinesis, not those which occur in the course
+-- of enqueuing a message.
+data RetryPolicy
+  = RetryPolicy
+  { _rpRetryCount ∷ {-# UNPACK #-} !Int
+  } deriving (Eq, Show)
+
+-- | The number of times to retry sending a message after it has first failed.
+--
+rpRetryCount ∷ Lens' RetryPolicy Int
+rpRetryCount = lens _rpRetryCount $ \rp n → rp { _rpRetryCount = n }
+
+-- | The default retry policy will attempt @5@ retries for a message.
+--
+defaultRetryPolicy ∷ RetryPolicy
+defaultRetryPolicy = RetryPolicy
+  { _rpRetryCount = 5
+  }
 
 type Message = T.Text
 
@@ -181,6 +207,9 @@ data ProducerKit
   , _pkBatchPolicy ∷ !BatchPolicy
   -- ^ The record batching policy for the producer.
 
+  , _pkRetryPolicy ∷ !RetryPolicy
+  -- ^ The retry policy for the producer.
+
   , _pkMessageQueueBounds ∷ {-# UNPACK #-} !Int
   -- ^ The maximum number of records that may be enqueued at one time.
 
@@ -203,6 +232,11 @@ pkStreamName = lens _pkStreamName $ \pk sn → pk { _pkStreamName = sn }
 pkBatchPolicy ∷ Lens' ProducerKit BatchPolicy
 pkBatchPolicy = lens _pkBatchPolicy $ \pk bp → pk { _pkBatchPolicy = bp }
 
+-- | A lens for '_pkRetryPolicy'.
+--
+pkRetryPolicy ∷ Lens' ProducerKit RetryPolicy
+pkRetryPolicy = lens _pkRetryPolicy $ \pk rp → pk { _pkRetryPolicy = rp }
+
 -- | A lens for '_pkMessageQueueBounds'.
 --
 pkMessageQueueBounds ∷ Lens' ProducerKit Int
@@ -215,13 +249,17 @@ pkMaxConcurrency = lens _pkMaxConcurrency $ \pk n → pk { _pkMaxConcurrency = n
 
 -- | The (abstract) Kinesis producer client.
 --
-newtype KinesisProducer
+data KinesisProducer
   = KinesisProducer
-  { _kpMessageQueue ∷ TBMQueue MessageQueueItem
+  { _kpMessageQueue ∷ !(TBMQueue MessageQueueItem)
+  , _kpRetryPolicy ∷ !RetryPolicy
   }
 
 kpMessageQueue ∷ Getter KinesisProducer (TBMQueue MessageQueueItem)
 kpMessageQueue = to _kpMessageQueue
+
+kpRetryPolicy ∷ Getter KinesisProducer RetryPolicy
+kpRetryPolicy = to _kpRetryPolicy
 
 data ProducerError
   = KinesisError !SomeException
@@ -477,7 +515,7 @@ writeProducer producer !msg = do
     tryWriteTBMQueue (producer ^. kpMessageQueue) MessageQueueItem
       { _mqiMessage = msg
       , _mqiPartitionKey = generatePartitionKey gen
-      , _mqiRemainingAttempts = 5
+      , _mqiRemainingAttempts = producer ^. kpRetryPolicy . rpRetryCount . to succ
       }
   case result of
     Just True → return ()
@@ -536,7 +574,10 @@ managedKinesisProducer kit = do
 
   Codensity $ \inner → do
     link consumerHandle
-    res ← inner $ KinesisProducer messageQueue
+    res ← inner KinesisProducer
+      { _kpMessageQueue = messageQueue
+      , _kpRetryPolicy = kit ^. pkRetryPolicy
+      }
     () ← wait consumerHandle
     return res
 
