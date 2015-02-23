@@ -149,6 +149,8 @@ data MessageQueueItem
   , _mqiPartitionKey ∷ !Kin.PartitionKey
   -- ^ The partition key the message is destined for
 
+  , _mqiRemainingAttempts ∷ !Int
+  -- ^ The number of times remaining to try and publish this message
   } deriving (Eq, Show)
 
 mqiMessage ∷ Lens' MessageQueueItem Message
@@ -156,6 +158,15 @@ mqiMessage = lens _mqiMessage $ \i m → i { _mqiMessage = m }
 
 mqiPartitionKey ∷ Lens' MessageQueueItem Kin.PartitionKey
 mqiPartitionKey = lens _mqiPartitionKey $ \i s → i { _mqiPartitionKey = s }
+
+mqiRemainingAttempts ∷ Lens' MessageQueueItem Int
+mqiRemainingAttempts = lens _mqiRemainingAttempts $ \i n → i { _mqiRemainingAttempts = n }
+
+messageQueueItemIsEligible
+  ∷ MessageQueueItem
+  → Bool
+messageQueueItemIsEligible =
+  (≥ 1) ∘ _mqiRemainingAttempts
 
 -- | The basic input required to construct a Kinesis producer.
 --
@@ -379,17 +390,18 @@ putRecordSink = do
             putStrLn $ "Error: " ++ show e
             putStrLn "Will wait 5s"
             threadDelay 5000000
-          leftover item
+          leftover $ item & mqiRemainingAttempts -~ 1
 
-    handleError handler $ do
-      let partitionKey = item ^. mqiPartitionKey
-      void ∘ lift ∘ liftKinesis $ runKinesis Kin.PutRecord
-        { Kin.putRecordData = item ^. mqiMessage ∘ to T.encodeUtf8
-        , Kin.putRecordExplicitHashKey = Nothing
-        , Kin.putRecordPartitionKey = partitionKey
-        , Kin.putRecordSequenceNumberForOrdering = Nothing
-        , Kin.putRecordStreamName = streamName
-        }
+    when (messageQueueItemIsEligible item) $
+      handleError handler $ do
+        let partitionKey = item ^. mqiPartitionKey
+        void ∘ lift ∘ liftKinesis $ runKinesis Kin.PutRecord
+          { Kin.putRecordData = item ^. mqiMessage ∘ to T.encodeUtf8
+          , Kin.putRecordExplicitHashKey = Nothing
+          , Kin.putRecordPartitionKey = partitionKey
+          , Kin.putRecordSequenceNumberForOrdering = Nothing
+          , Kin.putRecordStreamName = streamName
+          }
 
 splitEvery
   ∷ Int
@@ -412,31 +424,34 @@ putRecordsSink = do
   maxWorkerCount ← view pkMaxConcurrency
   awaitForever $ \messages → do
     let batches = splitEvery batchSize messages
-    leftovers ← lift ∘ flip (mapConcurrentlyN maxWorkerCount 100) batches $ \ms → do
-      let handler e = do
-            liftIO $ print e
-            return ms
+    leftovers ← lift ∘ flip (mapConcurrentlyN maxWorkerCount 100) batches $ \items → do
+      case filter messageQueueItemIsEligible items of
+        [] → return []
+        eligibleItems → do
+          handleError (\e → eligibleItems <$ liftIO (print e)) $ do
+            requestEntries ← for eligibleItems $ \m → do
+              let partitionKey = m ^. mqiPartitionKey
+              return Kin.PutRecordsRequestEntry
+                { Kin.putRecordsRequestEntryData = m ^. mqiMessage ∘ to T.encodeUtf8
+                , Kin.putRecordsRequestEntryExplicitHashKey = Nothing
+                , Kin.putRecordsRequestEntryPartitionKey = partitionKey
+                }
 
-      handleError handler $ do
-        items ← for ms $ \m → do
-          let partitionKey = m ^. mqiPartitionKey
-          return Kin.PutRecordsRequestEntry
-            { Kin.putRecordsRequestEntryData = m ^. mqiMessage ∘ to T.encodeUtf8
-            , Kin.putRecordsRequestEntryExplicitHashKey = Nothing
-            , Kin.putRecordsRequestEntryPartitionKey = partitionKey
-            }
+            Kin.PutRecordsResponse{..} ←  liftKinesis $ runKinesis Kin.PutRecords
+              { Kin.putRecordsRecords = requestEntries
+              , Kin.putRecordsStreamName = streamName
+              }
+            let
+              processResult m m'
+                | isJust (Kin.putRecordsResponseRecordErrorCode m') = Just m
+                | otherwise = Nothing
+            return ∘ catMaybes $ zipWith processResult eligibleItems putRecordsResponseRecords
 
-        Kin.PutRecordsResponse{..} ←  liftKinesis $ runKinesis Kin.PutRecords
-          { Kin.putRecordsRecords = items
-          , Kin.putRecordsStreamName = streamName
-          }
-        let processResult m m'
-              | isJust (Kin.putRecordsResponseRecordErrorCode m') = Just m
-              | otherwise = Nothing
-        return ∘ catMaybes $ zipWith processResult ms putRecordsResponseRecords
-
-    forM_ leftovers $ \mss →
-      unless (null mss) $ leftover mss
+    forM_ leftovers $ \items →
+      unless (null items) $
+        leftover $ items
+          <&> mqiRemainingAttempts -~ 1
+           & filter messageQueueItemIsEligible
 
 sendMessagesSink
   ∷ MonadProducerInternal m
@@ -462,6 +477,7 @@ writeProducer producer !msg = do
     tryWriteTBMQueue (producer ^. kpMessageQueue) MessageQueueItem
       { _mqiMessage = msg
       , _mqiPartitionKey = generatePartitionKey gen
+      , _mqiRemainingAttempts = 5
       }
   case result of
     Just True → return ()
