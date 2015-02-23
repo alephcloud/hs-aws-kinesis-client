@@ -28,6 +28,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TupleSections #-}
@@ -63,6 +64,9 @@ module Aws.Kinesis.Client.Producer
 , _KinesisError
 , _MessageNotEnqueued
 , _InvalidConcurrentConsumerCount
+, _MessageTooLarge
+
+, pattern MaxMessageSize
 
 , BatchPolicy
 , defaultBatchPolicy
@@ -109,6 +113,10 @@ data RecordEndpoint
   -- ^ Use the @PutRecords@ endpoint, which sends records in batches.
 
   deriving (Eq, Show)
+
+-- | The maximum size in bytes of a message.
+--
+pattern MaxMessageSize = 51000
 
 -- | The producer batches records according to a user-specified policy.
 --
@@ -216,6 +224,9 @@ data ProducerError
   -- ^ Thrown when a message could not be enqueued since the queue was full.
   -- This error must be handled at the call-site.
 
+  | MessageTooLarge
+  -- ^ Thrown when the message was larger than the maximum message size ('MaxMessageSize').
+
   | InvalidConcurrentConsumerCount
   -- ^ Thrown when 'pkMaxConcurrency' is set with an invalid value.
 
@@ -237,6 +248,14 @@ _MessageNotEnqueued ∷ Prism' ProducerError Message
 _MessageNotEnqueued =
   prism MessageNotEnqueued $ \case
     MessageNotEnqueued m → Right m
+    e → Left e
+
+-- | A prism for 'MessageTooLarge'.
+--
+_MessageTooLarge ∷ Prism' ProducerError ()
+_MessageTooLarge =
+  prism (const MessageTooLarge) $ \case
+    MessageTooLarge → Right ()
     e → Left e
 
 -- | A prism for 'InvalidConcurrentConsumerCount'.
@@ -453,6 +472,9 @@ writeProducer
   → Message
   → m ()
 writeProducer producer !msg = do
+  when (T.length msg > MaxMessageSize) $
+    throwError MessageTooLarge
+
   gen ← liftIO R.newStdGen
   result ← liftIO ∘ atomically $ do
     tryWriteTBMQueue (producer ^. kpMessageQueue) MessageQueueItem
