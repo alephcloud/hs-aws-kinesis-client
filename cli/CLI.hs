@@ -75,6 +75,7 @@ import Data.Typeable
 import Options.Applicative
 import qualified Network.HTTP.Conduit as HC
 import Prelude.Unicode
+import System.Exit
 import System.IO.Error
 
 data CLIError
@@ -113,7 +114,7 @@ fetchCredentials = do
 
 app
   ∷ MonadCLI m
-  ⇒ Codensity m ()
+  ⇒ Codensity m ExitCode
 app = do
   CLIOptions{..} ← ask
   manager ← managedHttpManager
@@ -172,11 +173,17 @@ app = do
     state ← consumerStreamState consumer
     liftIO ∘ BL8.writeFile outPath $ A.encode state
 
+  return $
+    if successful
+      then ExitSuccess
+      else ExitFailure 1
+
 main ∷ IO ()
-main =
-  eitherT (fail ∘ show) return $
+main = do
+  exitCode ← eitherT (fail ∘ show) return $
     liftIO (execParser parserInfo)
       ≫= runReaderT (lowerCodensity app)
+  exitWith exitCode
 
 managedHttpManager
   ∷ ( MonadIO m
