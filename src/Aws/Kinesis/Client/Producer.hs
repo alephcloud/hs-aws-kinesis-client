@@ -108,6 +108,7 @@ import Data.Traversable
 import Data.Typeable
 import Prelude.Unicode
 import qualified System.Random as R
+import System.IO
 
 -- | There are two endpoints which may be used to send records to Kinesis.
 --
@@ -444,8 +445,7 @@ putRecordSink = do
   awaitForever $ \item → do
     let handler e = do
           liftIO $ do
-            putStrLn $ "Error: " ++ show e
-            putStrLn "Will wait 5s"
+            hPutStrLn stderr $ "Kinesis producer client error (will wait 5s): " ++ show e
             threadDelay 5000000
           leftover $ item & mqiRemainingAttempts -~ 1
 
@@ -485,7 +485,7 @@ putRecordsSink = do
       case filter messageQueueItemIsEligible items of
         [] → return []
         eligibleItems → do
-          handleError (\e → eligibleItems <$ liftIO (print e)) $ do
+          handleError (\e → eligibleItems <$ liftIO (hPutStrLn stderr $ show e)) $ do
             requestEntries ← for eligibleItems $ \m → do
               let partitionKey = m ^. mqiPartitionKey
               return Kin.PutRecordsRequestEntry
