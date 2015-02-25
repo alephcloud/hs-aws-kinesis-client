@@ -2,7 +2,7 @@
 
 - [Producer] Write errors to stderr rather than stdout.
 
-- [Consumer CLI] Exist with a failure code (1) when the run is not considered
+- [Consumer CLI] Exit with a failure code (1) when the run is not considered
   successful (i.e.  if a limit was specified, and the CLI failed to retrieve
   that many records).
 
