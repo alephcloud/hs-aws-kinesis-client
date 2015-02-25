@@ -1,9 +1,10 @@
 ### v0.3.0.1
 
-All changes were in the Consumer CLI.
+- [Producer] Write errors to stderr rather than stdout.
 
-- Exist with a failure code (1) when the run is not considered successful (i.e.
-  if a limit was specified, and the CLI failed to retrieve that many records).
+- [Consumer CLI] Exist with a failure code (1) when the run is not considered
+  successful (i.e.  if a limit was specified, and the CLI failed to retrieve
+  that many records).
 
 ### v0.3.0.0
 
