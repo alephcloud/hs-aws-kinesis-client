@@ -1,3 +1,7 @@
+### v0.3.0.2
+
+- Upgrade aws-general, aws-kinesis lower bounds.
+
 ### v0.3.0.1
 
 - [Producer] Write errors to stderr rather than stdout.
