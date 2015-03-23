@@ -112,10 +112,6 @@ instance Eq ShardState where
 data ConsumerError
   = NoShards
   -- ^ A stream must always have at least one open shard.
-
-  | KinesisError !SomeException
-  -- ^ An error which derives from a request made to Kinesis.
-
   deriving Show
 
 -- | The 'ConsumerKit' contains what is needed to initialize a 'KinesisConsumer'.

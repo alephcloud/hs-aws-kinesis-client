@@ -61,7 +61,6 @@ module Aws.Kinesis.Client.Producer
 , pkMaxConcurrency
 
 , ProducerError(..)
-, _KinesisError
 , _MessageNotEnqueued
 , _InvalidConcurrentConsumerCount
 , _MessageTooLarge
@@ -268,10 +267,7 @@ kpRetryPolicy ∷ Getter KinesisProducer RetryPolicy
 kpRetryPolicy = to _kpRetryPolicy
 
 data ProducerError
-  = KinesisError !SomeException
-  -- ^ Represents an error which occured as a result of a request to Kinesis.
-
-  | MessageNotEnqueued Message
+  = MessageNotEnqueued Message
   -- ^ Thrown when a message could not be enqueued since the queue was full.
   -- This error must be handled at the call-site.
 
@@ -287,14 +283,6 @@ data ProducerError
   deriving (Typeable, Show)
 
 instance Exception ProducerError
-
--- | A prism for 'KinesisError'.
---
-_KinesisError ∷ Prism' ProducerError SomeException
-_KinesisError =
-  prism KinesisError $ \case
-    KinesisError e → Right e
-    e → Left e
 
 -- | A prism for 'MessageNotEnqueued'.
 --
