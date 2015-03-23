@@ -17,7 +17,7 @@ source-repository head
   location: https://github.com/alephcloud/hs-aws-kinesis-client.git
 
 library
-  exposed-modules:     Aws.Kinesis.Client.Common,
+  exposed-modules:     Aws.Kinesis.Client.Common
                        Aws.Kinesis.Client.Consumer
                        Aws.Kinesis.Client.Producer
   -- other-modules:
@@ -30,7 +30,7 @@ library
                        conduit >=1.2.3.1,
                        containers >=0.5.5.1,
                        data-carousel >=0.1.0.0,
-                       either >=4.3.2.1,
+                       enclosed-exceptions >=1.0.1,
                        errors >=1.4.7,
                        http-conduit >=2.1.5,
                        kan-extensions >=4.2,
@@ -66,8 +66,6 @@ executable kinesis-cli
                        aws-kinesis >=0.1.4,
                        aws-kinesis-client,
                        conduit >=1.2.3.1,
-                       either >=4.3.2.1,
-                       hoist-error >=0.1.0.2,
                        http-conduit >=2.1.5,
                        kan-extensions >=4.2,
                        lens >=4.7,

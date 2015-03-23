@@ -52,7 +52,6 @@ module Aws.Kinesis.Client.Consumer
 , ckStreamName
 , ckBatchSize
 , ConsumerError(..)
-, MonadConsumer
 , SavedStreamState
 ) where
 
@@ -65,11 +64,10 @@ import Control.Concurrent.Async.Lifted
 import Control.Concurrent.Lifted hiding (yield)
 import Control.Concurrent.STM
 import Control.Concurrent.STM.Queue
-import Control.Exception
+import Control.Exception.Lifted
 import Control.Lens
 import Control.Lens.Action
 import Control.Monad.Codensity
-import Control.Monad.Error.Class
 import Control.Monad.Reader
 import Control.Monad.Trans.Control
 import Control.Monad.Unicode
@@ -213,16 +211,9 @@ kcMessageQueue = to _kcMessageQueue
 kcStreamState ∷ Getter KinesisConsumer (TVar StreamState)
 kcStreamState = to _kcStreamState
 
--- | The basic effect modality required for operating the consumer.
---
-type MonadConsumer m
+type MonadConsumerInternal m
   = ( MonadIO m
     , MonadBaseControl IO m
-    , MonadError ConsumerError m
-    )
-
-type MonadConsumerInternal m
-  = ( MonadConsumer m
     , MonadReader ConsumerKit m
     )
 
@@ -231,7 +222,9 @@ type MonadConsumerInternal m
 -- continuation is replaced with returning the consumer in 'Codensity'.
 --
 managedKinesisConsumer
-  ∷ MonadConsumer m
+  ∷ ( MonadIO m
+    , MonadBaseControl IO m
+    )
   ⇒ ConsumerKit
   → Codensity m KinesisConsumer
 managedKinesisConsumer kit =
@@ -241,7 +234,9 @@ managedKinesisConsumer kit =
 -- it.
 --
 withKinesisConsumer
-  ∷ MonadConsumer m
+  ∷ ( MonadIO m
+    , MonadBaseControl IO m
+    )
   ⇒ ConsumerKit
   → (KinesisConsumer → m α)
   → m α
@@ -252,14 +247,14 @@ withKinesisConsumer kit inner =
 
     state ← updateStreamState CR.empty ≫= liftIO ∘ newTVarIO
     let reshardingLoop = forever $
-          handleError (\_ → liftIO $ threadDelay 3000000) $ do
+          handle (\(SomeException _) → liftIO $ threadDelay 3000000) $ do
             liftIO (readTVarIO state)
               ≫= updateStreamState
               ≫= liftIO ∘ atomically ∘ writeTVar state
             liftIO $ threadDelay 10000000
 
         producerLoop = forever $
-          handleError (\_ → liftIO $ threadDelay 2000000) $ do
+          handle (\(SomeException _) → liftIO $ threadDelay 2000000) $ do
             recordsCount ← replenishMessages messageQueue state
             liftIO ∘ threadDelay $
               case recordsCount of
@@ -286,7 +281,7 @@ updateStreamState state = do
   defaultIteratorType ← view ckIteratorType
   savedState ← view ckSavedStreamState
 
-  mapError KinesisError ∘ mapEnvironment ckKinesisKit $ do
+  mapEnvironment ckKinesisKit $ do
     let existingShardIds = state ^. CR.clList <&> view ssShardId
         shardSource = flip mapOutputMaybe (streamOpenShardSource streamName) $ \sh@Kin.Shard{..} →
           if shardShardId `elem` existingShardIds
@@ -336,7 +331,7 @@ replenishMessages messageQueue shardsVar = do
     iterator ← maybe retry return miterator
     return (shard, iterator)
 
-  Kin.GetRecordsResponse{..} ← mapError KinesisError ∘ mapEnvironment ckKinesisKit $ runKinesis Kin.GetRecords
+  Kin.GetRecordsResponse{..} ← mapEnvironment ckKinesisKit $ runKinesis Kin.GetRecords
     { getRecordsLimit = Just bufferSize
     , getRecordsShardIterator = iterator
     }
@@ -351,7 +346,9 @@ replenishMessages messageQueue shardsVar = do
 -- | Await and read a single record from the consumer.
 --
 readConsumer
-  ∷ MonadConsumer m
+  ∷ ( MonadIO m
+    , MonadBaseControl IO m
+    )
   ⇒ KinesisConsumer
   → m Kin.Record
 readConsumer consumer =
@@ -364,7 +361,9 @@ readConsumer consumer =
 -- then 'Nothing' will be returned.
 --
 tryReadConsumer
-  ∷ MonadConsumer m
+  ∷ ( MonadIO m
+    , MonadBaseControl IO m
+    )
   ⇒ KinesisConsumer
   → m (Maybe Kin.Record)
 tryReadConsumer consumer =
@@ -377,7 +376,9 @@ tryReadConsumer consumer =
 -- | A conduit for getting records.
 --
 consumerSource
-  ∷ MonadConsumer m
+  ∷ ( MonadIO m
+    , MonadBaseControl IO m
+    )
   ⇒ KinesisConsumer
   → Source m Kin.Record
 consumerSource consumer =
@@ -388,7 +389,9 @@ consumerSource consumer =
 -- | Get the last read sequence number at each shard.
 --
 consumerStreamState
-  ∷ MonadConsumer m
+  ∷ ( MonadIO m
+    , MonadBaseControl IO m
+    )
   ⇒ KinesisConsumer
   → m SavedStreamState
 consumerStreamState consumer =

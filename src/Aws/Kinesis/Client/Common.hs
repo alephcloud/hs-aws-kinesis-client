@@ -44,8 +44,6 @@ module Aws.Kinesis.Client.Common
 , shardIsOpen
 
   -- * Miscellaneous monad stuff
-, mapError
-, handleError
 , mapEnvironment
 ) where
 
@@ -57,7 +55,6 @@ import Control.Lens
 import Control.Error
 import Control.Monad
 import Control.Monad.Reader.Class
-import Control.Monad.Error.Class
 import Control.Monad.Trans
 import Control.Monad.Trans.Reader
 import Control.Monad.Trans.Resource
@@ -96,7 +93,6 @@ kkManager = lens _kkManager $ \kk mgr → kk { _kkManager = mgr }
 type MonadKinesis m
   = ( MonadIO m
     , MonadReader KinesisKit m
-    , MonadError SomeException m
     )
 
 -- | Run a Kinesis request inside 'MonadKinesis'.
@@ -110,7 +106,7 @@ runKinesis
   → m resp
 runKinesis req = do
   KinesisKit{..} ← view id
-  eitherT throwError return ∘ syncIO ∘ runResourceT $
+  eitherT throw return ∘ syncIO ∘ runResourceT $
     Aws.pureAws
       _kkConfiguration
       _kkKinesisConfiguration
@@ -163,27 +159,6 @@ streamOpenShardSource streamName =
     if shardIsOpen shard
       then Just shard
       else Nothing
-
--- | This function may be used to transform a computation with errors in one
--- type to one with errors in another type. Whilst the argument is fixed at
--- 'EitherT', this may be used where the argument is in an /arbitrary/ monad,
--- since it will simply get instantiated at 'EitherT'.
---
-mapError
-  ∷ MonadError e' m
-  ⇒ (e → e')
-  → EitherT e m a
-  → m a
-mapError e = eitherT (throwError ∘ e) return
-
--- | This is a verion of 'catchError' with its arguments flipped.
---
-handleError
-  ∷ MonadError e m
-  ⇒ (e → m α)
-  → m α
-  → m α
-handleError = flip catchError
 
 -- | Analogous to 'withReader', but supports a result in 'MonadReader'.
 --

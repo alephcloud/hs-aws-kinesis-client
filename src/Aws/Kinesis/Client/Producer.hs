@@ -52,7 +52,6 @@ module Aws.Kinesis.Client.Producer
 , Message
 
   -- * Producer Environment
-, MonadProducer
 , ProducerKit(..)
 , pkKinesisKit
 , pkStreamName
@@ -82,7 +81,6 @@ module Aws.Kinesis.Client.Producer
 ) where
 
 import qualified Aws.Kinesis as Kin
-import qualified Aws.Kinesis.Commands.PutRecords as Kin
 import Aws.Kinesis.Client.Common
 
 import Control.Applicative
@@ -90,14 +88,13 @@ import Control.Concurrent.Async.Lifted
 import Control.Concurrent.Lifted hiding (yield)
 import Control.Concurrent.STM
 import Control.Concurrent.STM.TBMQueue
+import Control.Exception.Enclosed
 import Control.Exception.Lifted
 import Control.Lens
 import Control.Monad
 import Control.Monad.Codensity
-import Control.Monad.Error.Class
 import Control.Monad.Reader
 import Control.Monad.Trans.Control
-import Control.Monad.Trans.Either
 import Data.Conduit
 import Data.Conduit.TQueue
 import qualified Data.Conduit.List as CL
@@ -284,6 +281,9 @@ data ProducerError
   | InvalidConcurrentConsumerCount
   -- ^ Thrown when 'pkMaxConcurrency' is set with an invalid value.
 
+  | ProducerWorkerDied
+  -- ^ Thrown when the producer's worker dies unexpectedly (this is fatal).
+
   deriving (Typeable, Show)
 
 instance Exception ProducerError
@@ -320,28 +320,18 @@ _InvalidConcurrentConsumerCount =
     InvalidConcurrentConsumerCount → Right ()
     e → Left e
 
--- | The basic effect modality required to use the Kinesis producer.
---
-type MonadProducer m
+type MonadProducerInternal m
   = ( MonadIO m
     , MonadBaseControl IO m
-    , MonadError ProducerError m
-    )
-
-type MonadProducerInternal m
-  = ( MonadProducer m
     , MonadReader ProducerKit m
     )
 
--- | Lifts something in 'MonadKinesis' to 'MonadProducer'.
---
 liftKinesis
   ∷ MonadProducerInternal m
-  ⇒ EitherT SomeException (ReaderT KinesisKit m) α
+  ⇒ ReaderT KinesisKit m α
   → m α
 liftKinesis =
   mapEnvironment pkKinesisKit
-    ∘ mapError KinesisError
 
 -- | Generates a valid 'Kin.PartitionKey'.
 --
@@ -443,22 +433,22 @@ putRecordSink = do
   streamName ← view pkStreamName
 
   awaitForever $ \item → do
-    let handler e = do
+    when (messageQueueItemIsEligible item) $ do
+      let partitionKey = item ^. mqiPartitionKey
+      result ← lift ∘ tryAny ∘ liftKinesis $ runKinesis Kin.PutRecord
+        { Kin.putRecordData = item ^. mqiMessage ∘ to T.encodeUtf8
+        , Kin.putRecordExplicitHashKey = Nothing
+        , Kin.putRecordPartitionKey = partitionKey
+        , Kin.putRecordSequenceNumberForOrdering = Nothing
+        , Kin.putRecordStreamName = streamName
+        }
+      case result of
+        Left (SomeException e) → do
           liftIO $ do
             hPutStrLn stderr $ "Kinesis producer client error (will wait 5s): " ++ show e
             threadDelay 5000000
           leftover $ item & mqiRemainingAttempts -~ 1
-
-    when (messageQueueItemIsEligible item) $
-      handleError handler $ do
-        let partitionKey = item ^. mqiPartitionKey
-        void ∘ lift ∘ liftKinesis $ runKinesis Kin.PutRecord
-          { Kin.putRecordData = item ^. mqiMessage ∘ to T.encodeUtf8
-          , Kin.putRecordExplicitHashKey = Nothing
-          , Kin.putRecordPartitionKey = partitionKey
-          , Kin.putRecordSequenceNumberForOrdering = Nothing
-          , Kin.putRecordStreamName = streamName
-          }
+        Right _ → return ()
 
 splitEvery
   ∷ Int
@@ -485,7 +475,7 @@ putRecordsSink = do
       case filter messageQueueItemIsEligible items of
         [] → return []
         eligibleItems → do
-          handleError (\e → eligibleItems <$ liftIO (hPutStrLn stderr $ show e)) $ do
+          handleAny (\(SomeException e) → eligibleItems <$ liftIO (hPutStrLn stderr $ show e)) $ do
             requestEntries ← for eligibleItems $ \m → do
               let partitionKey = m ^. mqiPartitionKey
               return Kin.PutRecordsRequestEntry
@@ -494,7 +484,7 @@ putRecordsSink = do
                 , Kin.putRecordsRequestEntryPartitionKey = partitionKey
                 }
 
-            Kin.PutRecordsResponse{..} ←  liftKinesis $ runKinesis Kin.PutRecords
+            Kin.PutRecordsResponse{..} ← liftKinesis $ runKinesis Kin.PutRecords
               { Kin.putRecordsRecords = requestEntries
               , Kin.putRecordsStreamName = streamName
               }
@@ -524,13 +514,15 @@ sendMessagesSink = do
 -- 'MessageNotEnqueued' exception will be thrown.
 --
 writeProducer
-  ∷ MonadProducer m
+  ∷ ( MonadIO m
+    , MonadBaseControl IO m
+    )
   ⇒ KinesisProducer
   → Message
-  → m ()
+  → m (Either ProducerError ())
 writeProducer producer !msg = do
   when (T.length msg > MaxMessageSize) $
-    throwError MessageTooLarge
+    throw MessageTooLarge
 
   gen ← liftIO R.newStdGen
   result ← liftIO ∘ atomically $ do
@@ -540,8 +532,8 @@ writeProducer producer !msg = do
       , _mqiRemainingAttempts = producer ^. kpRetryPolicy . rpRetryCount . to succ
       }
   case result of
-    Just True → return ()
-    _ → throwError $ MessageNotEnqueued msg
+    Just True → return $ Right ()
+    _ → return . Left $ MessageNotEnqueued msg
 
 -- | This is a 'Source' that returns all the items presently in a queue: it
 -- terminates when the queue is empty.
@@ -565,43 +557,54 @@ managedKinesisProducer
   ∷ ∀ m
   . ( MonadIO m
     , MonadBaseControl IO m
-    , MonadError ProducerError m
     )
   ⇒ ProducerKit
   → Codensity m KinesisProducer
 managedKinesisProducer kit = do
   when (kit ^. pkMaxConcurrency < 1) ∘ lift $
-    throwError InvalidConcurrentConsumerCount
+    throw InvalidConcurrentConsumerCount
 
   messageQueue ← liftIO ∘ newTBMQueueIO $ kit ^. pkMessageQueueBounds
 
-  let chunkingPolicy = ChunkingPolicy ((kit ^. pkBatchPolicy ∘ bpBatchSize) * (kit ^. pkMaxConcurrency)) 5000000
-      -- TODO: this 'forever' is only here to restart if we get killed.
-      -- Replace with proper error handling.
-      consumerLoop ∷ m () = flip runReaderT kit ∘ forever $
-        chunkSource chunkingPolicy (sourceTBMQueue messageQueue)
-          $$ sendMessagesSink
-
-  let cleanupConsumer consumerHandle = do
-        liftIO ∘ atomically $ closeTBMQueue messageQueue
-        flip runReaderT kit $ do
-          leftovers ← liftIO ∘ atomically $
-            exhaustTBMQueue messageQueue
-              $$ CL.consume
-          chunkSource chunkingPolicy (CL.sourceList leftovers)
-            $$ sendMessagesSink
-        cancel consumerHandle
-
-  consumerHandle ← managedBracket (async consumerLoop) cleanupConsumer
-
-  Codensity $ \inner → do
-    link consumerHandle
-    res ← inner KinesisProducer
+  let
+    producer = KinesisProducer
       { _kpMessageQueue = messageQueue
       , _kpRetryPolicy = kit ^. pkRetryPolicy
       }
-    () ← wait consumerHandle
-    return res
+
+    chunkingPolicy = ChunkingPolicy
+      { _cpMaxChunkSize = (kit ^. pkBatchPolicy ∘ bpBatchSize) * (kit ^. pkMaxConcurrency)
+      , _cpThrottlingDelay = 5000000
+      }
+
+    -- TODO: this 'forever' is only here to restart if we get killed.
+    -- Replace with proper error handling.
+    consumerLoop ∷ m () = flip runReaderT kit ∘ forever $
+      chunkSource chunkingPolicy (sourceTBMQueue messageQueue)
+        $$ sendMessagesSink
+
+    cleanupConsumer h = do
+      liftIO ∘ atomically $ closeTBMQueue messageQueue
+      flip runReaderT kit $ do
+        leftovers ← liftIO ∘ atomically $
+          exhaustTBMQueue messageQueue
+            $$ CL.consume
+        chunkSource chunkingPolicy (CL.sourceList leftovers)
+          $$ sendMessagesSink
+      cancel h
+
+  workerHandle ← managedBracket (async consumerLoop) cleanupConsumer
+
+  Codensity $ \inner → do
+    result ← race (inner producer) (waitCatch workerHandle)
+    case result of
+      Left r → do
+        -- if `inner` terminates first, cancel the worker and clean up
+        cancel workerHandle
+        return r
+      Right ee →
+        -- if the worker has died first, report the error
+        throw $ either id (\_ → toException ProducerWorkerDied) ee
 
 
 -- | This constructs a 'KinesisProducer' and closes it when you have done with
@@ -610,7 +613,6 @@ managedKinesisProducer kit = do
 withKinesisProducer
   ∷ ( MonadIO m
     , MonadBaseControl IO m
-    , MonadError ProducerError m
     )
   ⇒ ProducerKit
   → (KinesisProducer → m α)

@@ -55,12 +55,9 @@ import Control.Lens
 import Control.Monad
 import Control.Monad.Trans
 import Control.Monad.Trans.Control
-import Control.Monad.Trans.Either
 import Control.Monad.Codensity
 import Control.Monad.Reader.Class
 import Control.Monad.Trans.Reader (ReaderT(..))
-import Control.Monad.Error.Class
-import Control.Monad.Error.Hoist
 import Control.Monad.Unicode
 
 import qualified Data.Aeson as A
@@ -89,7 +86,6 @@ type MonadCLI m
   = ( MonadReader CLIOptions m
     , MonadIO m
     , MonadBaseControl IO m
-    , MonadError ConsumerError m
     )
 
 fetchCredentials
@@ -99,7 +95,7 @@ fetchCredentials = do
   view clioUseInstanceMetadata ≫= \case
     True →
       loadCredentialsFromInstanceMetadata
-        <!?> KinesisError (toException NoInstanceMetadataCredentials)
+        ≫= maybe (throw NoInstanceMetadataCredentials) return
     False →
       view clioAccessKeys ≫= \case
         Just (CredentialsFromAccessKeys aks) →
@@ -108,9 +104,9 @@ fetchCredentials = do
             (aks ^. akSecretAccessKey)
         Just (CredentialsFromFile path) →
           loadCredentialsFromFile path credentialsDefaultKey
-            <!?> KinesisError (toException MissingCredentials)
+            ≫= maybe (throw MissingCredentials) return
         Nothing →
-          throwError $ KinesisError (toException MissingCredentials)
+          throw MissingCredentials
 
 app
   ∷ MonadCLI m
@@ -180,7 +176,7 @@ app = do
 
 main ∷ IO ()
 main = do
-  exitCode ← eitherT (fail ∘ show) return $
+  exitCode ←
     liftIO (execParser parserInfo)
       ≫= runReaderT (lowerCodensity app)
   exitWith exitCode
