@@ -51,6 +51,8 @@ module Aws.Kinesis.Client.Consumer
 , ckKinesisKit
 , ckStreamName
 , ckBatchSize
+, ckIteratorType
+, ckSavedStreamState
 , ConsumerError(..)
 , SavedStreamState
 ) where
