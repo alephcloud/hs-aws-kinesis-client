@@ -31,7 +31,6 @@ library
                        containers >=0.5.5.1,
                        data-carousel >=0.1.0.0,
                        enclosed-exceptions >=1.0.1,
-                       errors >=1.4.7,
                        http-conduit >=2.1.5,
                        kan-extensions >=4.2,
                        lens >=4.7,

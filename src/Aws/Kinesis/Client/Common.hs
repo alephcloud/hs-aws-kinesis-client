@@ -42,23 +42,16 @@ module Aws.Kinesis.Client.Common
 , streamShardSource
 , streamOpenShardSource
 , shardIsOpen
-
-  -- * Miscellaneous monad stuff
-, mapEnvironment
 ) where
 
 import qualified Aws
 import qualified Aws.Core as Aws
 import qualified Aws.Kinesis as Kin
-import Control.Exception
 import Control.Lens
-import Control.Error
 import Control.Monad
 import Control.Monad.Reader.Class
 import Control.Monad.Trans
-import Control.Monad.Trans.Reader
 import Control.Monad.Trans.Resource
-import Control.Monad.Unicode
 import Data.Conduit
 import qualified Data.Conduit.List as CL
 import qualified Network.HTTP.Conduit as HC
@@ -98,32 +91,32 @@ type MonadKinesis m
 -- | Run a Kinesis request inside 'MonadKinesis'.
 --
 runKinesis
-  ∷ ( MonadKinesis m
+  ∷ ( MonadIO m
     , Aws.ServiceConfiguration req ~ Kin.KinesisConfiguration
     , Aws.Transaction req resp
     )
-  ⇒ req
+  ⇒ KinesisKit
+  → req
   → m resp
-runKinesis req = do
-  KinesisKit{..} ← view id
-  eitherT throw return ∘ syncIO ∘ runResourceT $
+runKinesis KinesisKit{..} =
+  liftIO ∘ runResourceT ∘
     Aws.pureAws
       _kkConfiguration
       _kkKinesisConfiguration
       _kkManager
-      req
 
 shardIsOpen
   ∷ Kin.Shard
   → Bool
 shardIsOpen Kin.Shard{..} =
-  isNothing $ shardSequenceNumberRange ^. _2
+  has _Nothing $ shardSequenceNumberRange ^. _2
 
 fetchShardsConduit
-  ∷ MonadKinesis m
-  ⇒ Kin.StreamName
+  ∷ MonadIO m
+  ⇒ KinesisKit
+  → Kin.StreamName
   → Conduit (Maybe Kin.ShardId) m Kin.Shard
-fetchShardsConduit streamName =
+fetchShardsConduit kit streamName =
   awaitForever $ \mshardId → do
     let req = Kin.DescribeStream
           { Kin.describeStreamExclusiveStartShardId = mshardId
@@ -131,7 +124,7 @@ fetchShardsConduit streamName =
           , Kin.describeStreamStreamName = streamName
           }
     resp@(Kin.DescribeStreamResponse Kin.StreamDescription{..}) ←
-      lift $ runKinesis req
+      lift $ runKinesis kit req
     yield `mapM_` streamDescriptionShards
     void ∘ traverse (leftover ∘ Just) $
       Kin.describeStreamExclusiveStartShardId =<<
@@ -142,30 +135,23 @@ fetchShardsConduit streamName =
 -- | A 'Source' of shards for a stream.
 --
 streamShardSource
-  ∷ MonadKinesis m
-  ⇒ Kin.StreamName
+  ∷ MonadIO m
+  ⇒ KinesisKit
+  → Kin.StreamName
   → Source m Kin.Shard
-streamShardSource streamName =
-  CL.sourceList [Nothing] $= fetchShardsConduit streamName
+streamShardSource kit streamName =
+  CL.sourceList [Nothing] $= fetchShardsConduit kit streamName
 
 -- | A 'Source' of open shards for a stream.
 --
 streamOpenShardSource
-  ∷ MonadKinesis m
-  ⇒ Kin.StreamName
+  ∷ MonadIO m
+  ⇒ KinesisKit
+  → Kin.StreamName
   → Source m Kin.Shard
-streamOpenShardSource streamName =
-  flip mapOutputMaybe (streamShardSource streamName) $ \shard →
+streamOpenShardSource kit streamName =
+  flip mapOutputMaybe (streamShardSource kit streamName) $ \shard →
     if shardIsOpen shard
       then Just shard
       else Nothing
-
--- | Analogous to 'withReader', but supports a result in 'MonadReader'.
---
-mapEnvironment
-  ∷ MonadReader r' m
-  ⇒ Getter r' r
-  → ReaderT r m a
-  → m a
-mapEnvironment l m = view l ≫= runReaderT m
 

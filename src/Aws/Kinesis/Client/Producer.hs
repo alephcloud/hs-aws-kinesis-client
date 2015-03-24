@@ -314,13 +314,6 @@ type MonadProducerInternal m
     , MonadReader ProducerKit m
     )
 
-liftKinesis
-  ∷ MonadProducerInternal m
-  ⇒ ReaderT KinesisKit m α
-  → m α
-liftKinesis =
-  mapEnvironment pkKinesisKit
-
 -- | Generates a valid 'Kin.PartitionKey'.
 --
 generatePartitionKey
@@ -419,11 +412,12 @@ putRecordSink
   ⇒ Sink MessageQueueItem m ()
 putRecordSink = do
   streamName ← view pkStreamName
+  kinesisKit ← view pkKinesisKit
 
   awaitForever $ \item → do
     when (messageQueueItemIsEligible item) $ do
       let partitionKey = item ^. mqiPartitionKey
-      result ← lift ∘ tryAny ∘ liftKinesis $ runKinesis Kin.PutRecord
+      result ← lift ∘ tryAny $ runKinesis kinesisKit Kin.PutRecord
         { Kin.putRecordData = item ^. mqiMessage ∘ to T.encodeUtf8
         , Kin.putRecordExplicitHashKey = Nothing
         , Kin.putRecordPartitionKey = partitionKey
@@ -457,6 +451,8 @@ putRecordsSink = do
   streamName ← view pkStreamName
   batchSize ← view $ pkBatchPolicy ∘ bpBatchSize
   maxWorkerCount ← view pkMaxConcurrency
+  kinesisKit ← view pkKinesisKit
+
   awaitForever $ \messages → do
     let batches = splitEvery batchSize messages
     leftovers ← lift ∘ flip (mapConcurrentlyN maxWorkerCount 100) batches $ \items → do
@@ -472,7 +468,7 @@ putRecordsSink = do
                 , Kin.putRecordsRequestEntryPartitionKey = partitionKey
                 }
 
-            Kin.PutRecordsResponse{..} ← liftKinesis $ runKinesis Kin.PutRecords
+            Kin.PutRecordsResponse{..} ← runKinesis kinesisKit Kin.PutRecords
               { Kin.putRecordsRecords = requestEntries
               , Kin.putRecordsStreamName = streamName
               }

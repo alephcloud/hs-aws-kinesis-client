@@ -273,42 +273,42 @@ updateStreamState
   ⇒ StreamState
   → m StreamState
 updateStreamState state = do
+  kinesisKit ← view ckKinesisKit
   streamName ← view ckStreamName
   defaultIteratorType ← view ckIteratorType
   savedState ← view ckSavedStreamState
 
-  mapEnvironment ckKinesisKit $ do
-    let existingShardIds = state ^. CR.clList <&> view ssShardId
-        shardSource = flip mapOutputMaybe (streamOpenShardSource streamName) $ \sh@Kin.Shard{..} →
-          if shardShardId `elem` existingShardIds
-            then Nothing
-            else Just sh
+  let existingShardIds = state ^. CR.clList <&> view ssShardId
+      shardSource = flip mapOutputMaybe (streamOpenShardSource kinesisKit streamName) $ \sh@Kin.Shard{..} →
+        if shardShardId `elem` existingShardIds
+          then Nothing
+          else Just sh
 
-    newShards ← shardSource $$ CL.consume
-    shardStates ← forM newShards $ \Kin.Shard{..} → do
-      let startingSequenceNumber =
-            savedState ^? _Just ∘ _SavedStreamState ∘ ix shardShardId
-          iteratorType =
-            maybe
-              defaultIteratorType
-              (const Kin.AfterSequenceNumber)
-              startingSequenceNumber
+  newShards ← shardSource $$ CL.consume
+  shardStates ← forM newShards $ \Kin.Shard{..} → do
+    let startingSequenceNumber =
+          savedState ^? _Just ∘ _SavedStreamState ∘ ix shardShardId
+        iteratorType =
+          maybe
+            defaultIteratorType
+            (const Kin.AfterSequenceNumber)
+            startingSequenceNumber
 
-      Kin.GetShardIteratorResponse it ← runKinesis Kin.GetShardIterator
-        { Kin.getShardIteratorShardId = shardShardId
-        , Kin.getShardIteratorShardIteratorType = iteratorType
-        , Kin.getShardIteratorStartingSequenceNumber = startingSequenceNumber
-        , Kin.getShardIteratorStreamName = streamName
+    Kin.GetShardIteratorResponse it ← runKinesis kinesisKit Kin.GetShardIterator
+      { Kin.getShardIteratorShardId = shardShardId
+      , Kin.getShardIteratorShardIteratorType = iteratorType
+      , Kin.getShardIteratorStartingSequenceNumber = startingSequenceNumber
+      , Kin.getShardIteratorStreamName = streamName
+      }
+    liftIO $ do
+      iteratorVar ← newTVarIO $ Just it
+      sequenceNumberVar ← newTVarIO Nothing
+      return ShardState
+        { _ssIterator = iteratorVar
+        , _ssShardId = shardShardId
+        , _ssLastSequenceNumber = sequenceNumberVar
         }
-      liftIO $ do
-        iteratorVar ← newTVarIO $ Just it
-        sequenceNumberVar ← newTVarIO Nothing
-        return ShardState
-          { _ssIterator = iteratorVar
-          , _ssShardId = shardShardId
-          , _ssLastSequenceNumber = sequenceNumberVar
-          }
-    return ∘ CR.nub $ CR.append shardStates state
+  return ∘ CR.nub $ CR.append shardStates state
 
 -- | Waits for a message queue to be emptied and fills it up again.
 --
@@ -327,7 +327,8 @@ replenishMessages messageQueue shardsVar = do
     iterator ← maybe retry return miterator
     return (shard, iterator)
 
-  Kin.GetRecordsResponse{..} ← mapEnvironment ckKinesisKit $ runKinesis Kin.GetRecords
+  kinesisKit ← view ckKinesisKit
+  Kin.GetRecordsResponse{..} ← runKinesis kinesisKit Kin.GetRecords
     { getRecordsLimit = Just bufferSize
     , getRecordsShardIterator = iterator
     }
