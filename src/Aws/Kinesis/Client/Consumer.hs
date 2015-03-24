@@ -244,20 +244,22 @@ withKinesisConsumer kit inner =
     messageQueue ← liftIO ∘ newTBQueueIO $ batchSize * 10
 
     state ← updateStreamState CR.empty ≫= liftIO ∘ newTVarIO
-    let reshardingLoop = forever $
-          handle (\(SomeException _) → liftIO $ threadDelay 3000000) $ do
-            liftIO (readTVarIO state)
-              ≫= updateStreamState
-              ≫= liftIO ∘ atomically ∘ writeTVar state
-            liftIO $ threadDelay 10000000
 
-        producerLoop = forever $
-          handle (\(SomeException _) → liftIO $ threadDelay 2000000) $ do
-            recordsCount ← replenishMessages messageQueue state
-            liftIO ∘ threadDelay $
-              case recordsCount of
-                0 → 5000000
-                _ → 70000
+    let
+      reshardingLoop =
+        forever ∘ handle (\(SomeException _) → liftIO $ threadDelay 3000000) $ do
+          liftIO (readTVarIO state)
+            ≫= updateStreamState
+            ≫= liftIO ∘ atomically ∘ writeTVar state
+          liftIO $ threadDelay 10000000
+
+      producerLoop =
+        forever ∘ handle (\(SomeException _) → liftIO $ threadDelay 2000000) $ do
+          recordsCount ← replenishMessages messageQueue state
+          liftIO ∘ threadDelay $
+            case recordsCount of
+              0 → 5000000
+              _ → 70000
 
 
     withAsync reshardingLoop $ \reshardingHandle → do
@@ -287,13 +289,14 @@ updateStreamState state = do
 
   newShards ← shardSource $$ CL.consume
   shardStates ← forM newShards $ \Kin.Shard{..} → do
-    let startingSequenceNumber =
-          _ckSavedStreamState ^? _Just ∘ _SavedStreamState ∘ ix shardShardId
-        iteratorType =
-          maybe
-            _ckIteratorType
-            (const Kin.AfterSequenceNumber)
-            startingSequenceNumber
+    let
+      startingSequenceNumber =
+        _ckSavedStreamState ^? _Just ∘ _SavedStreamState ∘ ix shardShardId
+      iteratorType =
+        maybe
+          _ckIteratorType
+          (const Kin.AfterSequenceNumber)
+          startingSequenceNumber
 
     Kin.GetShardIteratorResponse it ← runKinesis _ckKinesisKit Kin.GetShardIterator
       { Kin.getShardIteratorShardId = shardShardId
