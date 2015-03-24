@@ -584,7 +584,7 @@ managedKinesisProducer kit = do
         Nothing → flushQueue
       cancel h
 
-  workerHandle ← managedBracket (async workerLoop) cleanupWorker
+  workerHandle ← Codensity $ bracket (async workerLoop) cleanupWorker
 
   Codensity $ \inner → do
     result ← race (inner producer) (waitCatch workerHandle)
@@ -610,14 +610,6 @@ withKinesisProducer
   → m α
 withKinesisProducer =
   runCodensity ∘ managedKinesisProducer
-
-managedBracket
-  ∷ MonadBaseControl IO m
-  ⇒ m α
-  → (α → m β)
-  → Codensity m α
-managedBracket action cleanup =
-  Codensity $ bracket action cleanup
 
 -- | map at most n actions concurrently
 --
