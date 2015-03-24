@@ -53,7 +53,6 @@ module Aws.Kinesis.Client.Consumer
 , ckBatchSize
 , ckIteratorType
 , ckSavedStreamState
-, ConsumerError(..)
 , SavedStreamState
 ) where
 
@@ -110,11 +109,6 @@ ssLastSequenceNumber = to _ssLastSequenceNumber
 --
 instance Eq ShardState where
   ss == ss' = ss ^. ssShardId ≡ ss' ^. ssShardId
-
-data ConsumerError
-  = NoShards
-  -- ^ A stream must always have at least one open shard.
-  deriving Show
 
 -- | The 'ConsumerKit' contains what is needed to initialize a 'KinesisConsumer'.
 data ConsumerKit
