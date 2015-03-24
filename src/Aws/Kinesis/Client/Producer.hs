@@ -307,12 +307,6 @@ data InvalidProducerKit
 
 instance Exception InvalidProducerKit
 
-type MonadProducerInternal m
-  = ( MonadIO m
-    , MonadBaseControl IO m
-    , MonadReader ProducerKit m
-    )
-
 -- | Generates a valid 'Kin.PartitionKey'.
 --
 generatePartitionKey
@@ -394,24 +388,27 @@ chunkSource cp src = do
 -- @PutRecord@ endpoint.
 --
 concurrentPutRecordSink
-  ∷ MonadProducerInternal m
-  ⇒ Sink [MessageQueueItem] m ()
-concurrentPutRecordSink = do
-  maxWorkerCount ← view pkMaxConcurrency
+  ∷ ( MonadIO m
+    , MonadBaseControl IO m
+    )
+  ⇒ ProducerKit
+  → Sink [MessageQueueItem] m ()
+concurrentPutRecordSink kit@ProducerKit{..} = do
   awaitForever $ \messages → do
-    lift ∘ flip (mapConcurrentlyN maxWorkerCount 100) messages $ \m → do
-      CL.sourceList [m] $$ putRecordSink
+    lift ∘ flip (mapConcurrentlyN _pkMaxConcurrency 100) messages $ \m → do
+      CL.sourceList [m] $$ putRecordSink kit
 
 
 -- | A conduit for sending a record to Kinesis using the @PutRecord@ endpoint;
 -- this is a conduit in order to restore failed messages as leftovers.
 --
 putRecordSink
-  ∷ MonadProducerInternal m
-  ⇒ Sink MessageQueueItem m ()
-putRecordSink = do
-  ProducerKit{..} ← ask
-
+  ∷ ( MonadIO m
+    , MonadBaseControl IO m
+    )
+  ⇒ ProducerKit
+  → Sink MessageQueueItem m ()
+putRecordSink ProducerKit{..} = do
   awaitForever $ \item → do
     when (messageQueueItemIsEligible item) $ do
       let partitionKey = item ^. mqiPartitionKey
@@ -443,10 +440,12 @@ splitEvery n list = first : splitEvery n rest
 -- This is a conduit in order to restore failed messages as leftovers.
 --
 putRecordsSink
-  ∷ MonadProducerInternal m
-  ⇒ Sink [MessageQueueItem] m ()
-putRecordsSink = do
-  ProducerKit{..} ← ask
+  ∷ ( MonadIO m
+    , MonadBaseControl IO m
+    )
+  ⇒ ProducerKit
+  → Sink [MessageQueueItem] m ()
+putRecordsSink ProducerKit{..} = do
   let batchSize = _pkBatchPolicy ^. bpBatchSize
 
   awaitForever $ \messages → do
@@ -481,13 +480,15 @@ putRecordsSink = do
            & filter messageQueueItemIsEligible
 
 sendMessagesSink
-  ∷ MonadProducerInternal m
-  ⇒ Sink [MessageQueueItem] m ()
-sendMessagesSink = do
-  batchPolicy ← view pkBatchPolicy
-  case batchPolicy ^. bpEndpoint of
-    PutRecordsEndpoint → putRecordsSink
-    PutRecordEndpoint → concurrentPutRecordSink
+  ∷ ( MonadIO m
+    , MonadBaseControl IO m
+    )
+  ⇒ ProducerKit
+  → Sink [MessageQueueItem] m ()
+sendMessagesSink kit@ProducerKit{..} = do
+  case _pkBatchPolicy ^. bpEndpoint of
+    PutRecordsEndpoint → putRecordsSink kit
+    PutRecordEndpoint → concurrentPutRecordSink kit
 
 -- | Enqueues a message to Kinesis on the next shard. If a message cannot be
 -- enqueued (because the client has exceeded its queue size), the
@@ -561,20 +562,20 @@ managedKinesisProducer kit = do
     -- TODO: this 'forever' is only here to restart if we get killed.
     -- Replace with proper error handling.
     workerLoop ∷ m () =
-      flip runReaderT kit ∘ forever $
+      forever $
         chunkSource chunkingPolicy (sourceTBMQueue messageQueue)
-          $$ sendMessagesSink
+          $$ sendMessagesSink kit
 
     cleanupWorker h = do
       liftIO ∘ atomically $ closeTBMQueue messageQueue
 
       let
-        flushQueue = flip runReaderT kit $ do
+        flushQueue = do
           leftovers ← liftIO ∘ atomically $
             exhaustTBMQueue messageQueue
               $$ CL.consume
           chunkSource chunkingPolicy (CL.sourceList leftovers)
-            $$ sendMessagesSink
+            $$ sendMessagesSink kit
 
       case _pkCleanupTimeout kit of
         Just timeout →

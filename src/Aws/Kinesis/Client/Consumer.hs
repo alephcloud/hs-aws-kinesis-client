@@ -203,12 +203,6 @@ kcMessageQueue = to _kcMessageQueue
 kcStreamState ∷ Getter KinesisConsumer (TVar StreamState)
 kcStreamState = to _kcStreamState
 
-type MonadConsumerInternal m
-  = ( MonadIO m
-    , MonadBaseControl IO m
-    , MonadReader ConsumerKit m
-    )
-
 -- | This constructs a 'KinesisConsumer' and closes it when you have done with
 -- it; this is equivalent to 'withKinesisConsumer', except that the
 -- continuation is replaced with returning the consumer in 'Codensity'.
@@ -232,47 +226,46 @@ withKinesisConsumer
   ⇒ ConsumerKit
   → (KinesisConsumer → m α)
   → m α
-withKinesisConsumer kit inner =
-  flip runReaderT kit $ do
-    batchSize ← view ckBatchSize
-    messageQueue ← liftIO ∘ newTBQueueIO $ batchSize * 10
+withKinesisConsumer kit inner = do
+  let batchSize = kit ^. ckBatchSize
+  messageQueue ← liftIO ∘ newTBQueueIO $ batchSize * 10
 
-    state ← updateStreamState CR.empty ≫= liftIO ∘ newTVarIO
+  state ← updateStreamState kit CR.empty ≫= liftIO ∘ newTVarIO
 
-    let
-      reshardingLoop =
-        forever ∘ handle (\(SomeException _) → liftIO $ threadDelay 3000000) $ do
-          liftIO (readTVarIO state)
-            ≫= updateStreamState
-            ≫= liftIO ∘ atomically ∘ writeTVar state
-          liftIO $ threadDelay 10000000
+  let
+    reshardingLoop =
+      forever ∘ handle (\(SomeException _) → liftIO $ threadDelay 3000000) $ do
+        liftIO (readTVarIO state)
+          ≫= updateStreamState kit
+          ≫= liftIO ∘ atomically ∘ writeTVar state
+        liftIO $ threadDelay 10000000
 
-      producerLoop =
-        forever ∘ handle (\(SomeException _) → liftIO $ threadDelay 2000000) $ do
-          recordsCount ← replenishMessages messageQueue state
-          liftIO ∘ threadDelay $
-            case recordsCount of
-              0 → 5000000
-              _ → 70000
+    producerLoop =
+      forever ∘ handle (\(SomeException _) → liftIO $ threadDelay 2000000) $ do
+        recordsCount ← replenishMessages kit messageQueue state
+        liftIO ∘ threadDelay $
+          case recordsCount of
+            0 → 5000000
+            _ → 70000
 
-
-    withAsync reshardingLoop $ \reshardingHandle → do
-      link reshardingHandle
-      withAsync producerLoop $ \producerHandle → do
-        link producerHandle
-        res ← lift ∘ inner $ KinesisConsumer messageQueue state
-        return res
+  withAsync reshardingLoop $ \reshardingHandle → do
+    link reshardingHandle
+    withAsync producerLoop $ \producerHandle → do
+      link producerHandle
+      res ← inner $ KinesisConsumer messageQueue state
+      return res
 
 -- | This requests new information from Kinesis and reconciles that with an
 -- existing carousel of shard states.
 --
 updateStreamState
-  ∷ MonadConsumerInternal m
-  ⇒ StreamState
+  ∷ ( MonadIO m
+    , MonadBaseControl IO m
+    )
+  ⇒ ConsumerKit
+  → StreamState
   → m StreamState
-updateStreamState state = do
-  ConsumerKit{..} ← ask
-
+updateStreamState ConsumerKit{..} state = do
   let
     existingShardIds = state ^. CR.clList <&> view ssShardId
     shardSource =
@@ -311,12 +304,14 @@ updateStreamState state = do
 -- | Waits for a message queue to be emptied and fills it up again.
 --
 replenishMessages
-  ∷ MonadConsumerInternal m
-  ⇒ TBQueue MessageQueueItem
+  ∷ ( MonadIO m
+    , MonadBaseControl IO m
+    )
+  ⇒ ConsumerKit
+  → TBQueue MessageQueueItem
   → TVar StreamState
   → m Int
-replenishMessages messageQueue shardsVar = do
-  bufferSize ← view ckBatchSize
+replenishMessages ConsumerKit{..} messageQueue shardsVar = do
   liftIO ∘ atomically ∘ awaitQueueEmpty $ messageQueue
   (shard, iterator) ← liftIO ∘ atomically $ do
     mshard ← shardsVar ^!? act readTVar ∘ CR.cursor
@@ -325,9 +320,8 @@ replenishMessages messageQueue shardsVar = do
     iterator ← maybe retry return miterator
     return (shard, iterator)
 
-  kinesisKit ← view ckKinesisKit
-  Kin.GetRecordsResponse{..} ← runKinesis kinesisKit Kin.GetRecords
-    { getRecordsLimit = Just bufferSize
+  Kin.GetRecordsResponse{..} ← runKinesis _ckKinesisKit Kin.GetRecords
+    { getRecordsLimit = Just _ckBatchSize
     , getRecordsShardIterator = iterator
     }
 

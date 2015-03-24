@@ -35,7 +35,6 @@ module Aws.Kinesis.Client.Common
 , kkConfiguration
 , kkKinesisConfiguration
 , kkManager
-, MonadKinesis
 , runKinesis
 
   -- * Fetching Shards
@@ -49,7 +48,6 @@ import qualified Aws.Core as Aws
 import qualified Aws.Kinesis as Kin
 import Control.Lens
 import Control.Monad
-import Control.Monad.Reader.Class
 import Control.Monad.Trans
 import Control.Monad.Trans.Resource
 import Data.Conduit
@@ -81,14 +79,7 @@ kkKinesisConfiguration = lens _kkKinesisConfiguration $ \kk cfg → kk { _kkKine
 kkManager ∷ Lens' KinesisKit HC.Manager
 kkManager = lens _kkManager $ \kk mgr → kk { _kkManager = mgr }
 
--- | The minimal effect modality for running Kinesis commands.
---
-type MonadKinesis m
-  = ( MonadIO m
-    , MonadReader KinesisKit m
-    )
-
--- | Run a Kinesis request inside 'MonadKinesis'.
+-- | Run a Kinesis request.
 --
 runKinesis
   ∷ ( MonadIO m
