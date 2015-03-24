@@ -275,9 +275,10 @@ kpRetryPolicy ∷ Getter KinesisProducer RetryPolicy
 kpRetryPolicy = to _kpRetryPolicy
 
 data WriteProducerException
-  = MessageNotEnqueued Message
+  = ProducerQueueClosed
+    -- ^ Thrown when a message could not be enqueued since the queue was closed.
+  | ProducerQueueFull
     -- ^ Thrown when a message could not be enqueued since the queue was full.
-    -- This error must be handled at the call-site.
   | MessageTooLarge
     -- ^ Thrown when the message was larger than the maximum message size
     -- ('MaxMessageSize')
@@ -492,8 +493,7 @@ sendMessagesSink kit@ProducerKit{..} = do
     PutRecordEndpoint → concurrentPutRecordSink kit
 
 -- | Enqueues a message to Kinesis on the next shard. If a message cannot be
--- enqueued (because the client has exceeded its queue size), the
--- 'MessageNotEnqueued' exception will be thrown.
+-- enqueued, an error of type 'WriteProducerException' will be returned.
 --
 writeProducer
   ∷ MonadIO m
@@ -513,8 +513,8 @@ writeProducer producer !msg =
         , _mqiRemainingAttempts = producer ^. kpRetryPolicy . rpRetryCount . to succ
         }
     case result of
-      Just True → return ()
-      _ → throwE $ MessageNotEnqueued msg
+      Just written → unless written $ throwE ProducerQueueFull
+      Nothing → throwE $ ProducerQueueClosed
 
 -- | This is a 'Source' that returns all the items presently in a queue: it
 -- terminates when the queue is empty.
