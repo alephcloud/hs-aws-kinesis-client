@@ -339,12 +339,12 @@ takeTBMQueue n q
 --
 data ChunkingPolicy
   = ChunkingPolicy
-  { _cpMaxChunkSize ∷ Int
+  { _cpMaxChunkSize ∷ !Int
   -- ^ The largest chunk size that is permitted.
 
-  , _cpThrottlingDelay ∷ Int
-  -- ^ The time after which a chunk should be committed, even if the maximum
-  -- chunk size has not yet been reached.
+  , _cpMinChunkingInterval ∷ !Int
+  -- ^ The time in microseconds after which a chunk should be committed, even
+  -- if the maximum chunk size has not yet been reached.
   }
 
 -- | A 'Source' that reads chunks off a bounded STM queue according some
@@ -362,7 +362,7 @@ chunkedSourceTBMQueue bp@ChunkingPolicy{..} q = do
       yield items
 
     when (length items < _cpMaxChunkSize) $
-      threadDelay _cpThrottlingDelay
+      threadDelay _cpMinChunkingInterval
 
     chunkedSourceTBMQueue bp q
 
@@ -521,7 +521,7 @@ producerWorker kit source = do
   let
     chunkingPolicy = ChunkingPolicy
       { _cpMaxChunkSize = (kit ^. pkBatchPolicy ∘ bpBatchSize) * (kit ^. pkMaxConcurrency)
-      , _cpThrottlingDelay = 5000000
+      , _cpMinChunkingInterval = 5000000
       }
 
   chunkSource chunkingPolicy source
