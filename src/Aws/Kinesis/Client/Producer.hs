@@ -567,11 +567,11 @@ managedKinesisProducer kit = do
 
     -- TODO: this 'forever' is only here to restart if we get killed.
     -- Replace with proper error handling.
-    consumerLoop ∷ m () = flip runReaderT kit ∘ forever $
+    workerLoop ∷ m () = flip runReaderT kit ∘ forever $
       chunkSource chunkingPolicy (sourceTBMQueue messageQueue)
         $$ sendMessagesSink
 
-    cleanupConsumer h = do
+    cleanupWorker h = do
       liftIO ∘ atomically $ closeTBMQueue messageQueue
       flip runReaderT kit $ do
         leftovers ← liftIO ∘ atomically $
@@ -581,7 +581,7 @@ managedKinesisProducer kit = do
           $$ sendMessagesSink
       cancel h
 
-  workerHandle ← managedBracket (async consumerLoop) cleanupConsumer
+  workerHandle ← managedBracket (async workerLoop) cleanupWorker
 
   Codensity $ \inner → do
     result ← race (inner producer) (waitCatch workerHandle)
