@@ -273,13 +273,12 @@ updateStreamState
   ⇒ StreamState
   → m StreamState
 updateStreamState state = do
-  kinesisKit ← view ckKinesisKit
-  streamName ← view ckStreamName
-  defaultIteratorType ← view ckIteratorType
-  savedState ← view ckSavedStreamState
+  ConsumerKit{..} ← ask
 
-  let existingShardIds = state ^. CR.clList <&> view ssShardId
-      shardSource = flip mapOutputMaybe (streamOpenShardSource kinesisKit streamName) $ \sh@Kin.Shard{..} →
+  let
+    existingShardIds = state ^. CR.clList <&> view ssShardId
+    shardSource =
+      flip mapOutputMaybe (streamOpenShardSource _ckKinesisKit _ckStreamName) $ \sh@Kin.Shard{..} →
         if shardShardId `elem` existingShardIds
           then Nothing
           else Just sh
@@ -287,18 +286,18 @@ updateStreamState state = do
   newShards ← shardSource $$ CL.consume
   shardStates ← forM newShards $ \Kin.Shard{..} → do
     let startingSequenceNumber =
-          savedState ^? _Just ∘ _SavedStreamState ∘ ix shardShardId
+          _ckSavedStreamState ^? _Just ∘ _SavedStreamState ∘ ix shardShardId
         iteratorType =
           maybe
-            defaultIteratorType
+            _ckIteratorType
             (const Kin.AfterSequenceNumber)
             startingSequenceNumber
 
-    Kin.GetShardIteratorResponse it ← runKinesis kinesisKit Kin.GetShardIterator
+    Kin.GetShardIteratorResponse it ← runKinesis _ckKinesisKit Kin.GetShardIterator
       { Kin.getShardIteratorShardId = shardShardId
       , Kin.getShardIteratorShardIteratorType = iteratorType
       , Kin.getShardIteratorStartingSequenceNumber = startingSequenceNumber
-      , Kin.getShardIteratorStreamName = streamName
+      , Kin.getShardIteratorStreamName = _ckStreamName
       }
     liftIO $ do
       iteratorVar ← newTVarIO $ Just it

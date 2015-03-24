@@ -411,18 +411,17 @@ putRecordSink
   ∷ MonadProducerInternal m
   ⇒ Sink MessageQueueItem m ()
 putRecordSink = do
-  streamName ← view pkStreamName
-  kinesisKit ← view pkKinesisKit
+  ProducerKit{..} ← ask
 
   awaitForever $ \item → do
     when (messageQueueItemIsEligible item) $ do
       let partitionKey = item ^. mqiPartitionKey
-      result ← lift ∘ tryAny $ runKinesis kinesisKit Kin.PutRecord
+      result ← lift ∘ tryAny $ runKinesis _pkKinesisKit Kin.PutRecord
         { Kin.putRecordData = item ^. mqiMessage ∘ to T.encodeUtf8
         , Kin.putRecordExplicitHashKey = Nothing
         , Kin.putRecordPartitionKey = partitionKey
         , Kin.putRecordSequenceNumberForOrdering = Nothing
-        , Kin.putRecordStreamName = streamName
+        , Kin.putRecordStreamName = _pkStreamName
         }
       case result of
         Left (SomeException e) → do
@@ -448,14 +447,12 @@ putRecordsSink
   ∷ MonadProducerInternal m
   ⇒ Sink [MessageQueueItem] m ()
 putRecordsSink = do
-  streamName ← view pkStreamName
-  batchSize ← view $ pkBatchPolicy ∘ bpBatchSize
-  maxWorkerCount ← view pkMaxConcurrency
-  kinesisKit ← view pkKinesisKit
+  ProducerKit{..} ← ask
+  let batchSize = _pkBatchPolicy ^. bpBatchSize
 
   awaitForever $ \messages → do
     let batches = splitEvery batchSize messages
-    leftovers ← lift ∘ flip (mapConcurrentlyN maxWorkerCount 100) batches $ \items → do
+    leftovers ← lift ∘ flip (mapConcurrentlyN _pkMaxConcurrency 100) batches $ \items → do
       case filter messageQueueItemIsEligible items of
         [] → return []
         eligibleItems → do
@@ -468,9 +465,9 @@ putRecordsSink = do
                 , Kin.putRecordsRequestEntryPartitionKey = partitionKey
                 }
 
-            Kin.PutRecordsResponse{..} ← runKinesis kinesisKit Kin.PutRecords
+            Kin.PutRecordsResponse{..} ← runKinesis _pkKinesisKit Kin.PutRecords
               { Kin.putRecordsRecords = requestEntries
-              , Kin.putRecordsStreamName = streamName
+              , Kin.putRecordsStreamName = _pkStreamName
               }
             let
               processResult m m'
