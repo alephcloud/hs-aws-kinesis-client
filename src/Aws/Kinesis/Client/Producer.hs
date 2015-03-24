@@ -60,13 +60,13 @@ module Aws.Kinesis.Client.Producer
 , pkMessageQueueBounds
 , pkMaxConcurrency
 
+-- * Exceptions
 , ProducerError(..)
-, _MessageNotEnqueued
-, _InvalidConcurrentConsumerCount
-, _MessageTooLarge
+, WriteProducerException(..)
 
 , pattern MaxMessageSize
 
+-- * Policies
 , BatchPolicy
 , defaultBatchPolicy
 , bpBatchSize
@@ -272,14 +272,7 @@ kpRetryPolicy ∷ Getter KinesisProducer RetryPolicy
 kpRetryPolicy = to _kpRetryPolicy
 
 data ProducerError
-  = MessageNotEnqueued Message
-  -- ^ Thrown when a message could not be enqueued since the queue was full.
-  -- This error must be handled at the call-site.
-
-  | MessageTooLarge
-  -- ^ Thrown when the message was larger than the maximum message size ('MaxMessageSize').
-
-  | InvalidConcurrentConsumerCount
+  = InvalidConcurrentConsumerCount
   -- ^ Thrown when 'pkMaxConcurrency' is set with an invalid value.
 
   | ProducerWorkerDied
@@ -292,29 +285,16 @@ data ProducerError
 
 instance Exception ProducerError
 
--- | A prism for 'MessageNotEnqueued'.
---
-_MessageNotEnqueued ∷ Prism' ProducerError Message
-_MessageNotEnqueued =
-  prism MessageNotEnqueued $ \case
-    MessageNotEnqueued m → Right m
-    e → Left e
+data WriteProducerException
+  = MessageNotEnqueued Message
+    -- ^ Thrown when a message could not be enqueued since the queue was full.
+    -- This error must be handled at the call-site.
+  | MessageTooLarge
+    -- ^ Thrown when the message was larger than the maximum message size
+    -- ('MaxMessageSize')
+  deriving (Typeable, Show, Eq)
 
--- | A prism for 'MessageTooLarge'.
---
-_MessageTooLarge ∷ Prism' ProducerError ()
-_MessageTooLarge =
-  prism (const MessageTooLarge) $ \case
-    MessageTooLarge → Right ()
-    e → Left e
-
--- | A prism for 'InvalidConcurrentConsumerCount'.
---
-_InvalidConcurrentConsumerCount ∷ Prism' ProducerError ()
-_InvalidConcurrentConsumerCount =
-  prism (const InvalidConcurrentConsumerCount) $ \case
-    InvalidConcurrentConsumerCount → Right ()
-    e → Left e
+instance Exception WriteProducerException
 
 type MonadProducerInternal m
   = ( MonadIO m
@@ -508,21 +488,22 @@ writeProducer
     )
   ⇒ KinesisProducer
   → Message
-  → m (Either ProducerError ())
-writeProducer producer !msg = do
-  when (T.length msg > MaxMessageSize) $
-    throw MessageTooLarge
+  → m (Either WriteProducerException ())
+writeProducer producer !msg =
+  handle (return ∘ Left) ∘ fmap Right $ do
+    when (T.length msg > MaxMessageSize) $
+      return $ throw MessageTooLarge
 
-  gen ← liftIO R.newStdGen
-  result ← liftIO ∘ atomically $ do
-    tryWriteTBMQueue (producer ^. kpMessageQueue) MessageQueueItem
-      { _mqiMessage = msg
-      , _mqiPartitionKey = generatePartitionKey gen
-      , _mqiRemainingAttempts = producer ^. kpRetryPolicy . rpRetryCount . to succ
-      }
-  case result of
-    Just True → return $ Right ()
-    _ → return . Left $ MessageNotEnqueued msg
+    gen ← liftIO R.newStdGen
+    result ← liftIO ∘ atomically $ do
+      tryWriteTBMQueue (producer ^. kpMessageQueue) MessageQueueItem
+        { _mqiMessage = msg
+        , _mqiPartitionKey = generatePartitionKey gen
+        , _mqiRemainingAttempts = producer ^. kpRetryPolicy . rpRetryCount . to succ
+        }
+    case result of
+      Just True → return ()
+      _ → throw $ MessageNotEnqueued msg
 
 -- | This is a 'Source' that returns all the items presently in a queue: it
 -- terminates when the queue is empty.
