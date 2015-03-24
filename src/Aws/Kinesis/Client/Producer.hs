@@ -61,8 +61,10 @@ module Aws.Kinesis.Client.Producer
 , pkMaxConcurrency
 
 -- * Exceptions
-, ProducerError(..)
 , WriteProducerException(..)
+, ProducerCleanupTimedOut(..)
+, ProducerWorkerDied(..)
+, InvalidProducerKit(..)
 
 , pattern MaxMessageSize
 
@@ -271,20 +273,6 @@ kpMessageQueue = to _kpMessageQueue
 kpRetryPolicy ∷ Getter KinesisProducer RetryPolicy
 kpRetryPolicy = to _kpRetryPolicy
 
-data ProducerError
-  = InvalidConcurrentConsumerCount
-  -- ^ Thrown when 'pkMaxConcurrency' is set with an invalid value.
-
-  | ProducerWorkerDied
-  -- ^ Thrown when the producer's worker dies unexpectedly (this is fatal).
-
-  | ProducerCleanupTimedOut
-  -- ^ Thrown when the producer's cleanup routine takes longer than the configured timeout.
-
-  deriving (Typeable, Show)
-
-instance Exception ProducerError
-
 data WriteProducerException
   = MessageNotEnqueued Message
     -- ^ Thrown when a message could not be enqueued since the queue was full.
@@ -295,6 +283,29 @@ data WriteProducerException
   deriving (Typeable, Show, Eq)
 
 instance Exception WriteProducerException
+
+-- | Thrown when the producer's cleanup routine takes longer than the
+-- configured timeout.
+data ProducerCleanupTimedOut
+  = ProducerCleanupTimedOut
+  deriving (Typeable, Show, Eq)
+
+instance Exception ProducerCleanupTimedOut
+
+-- | Thrown when the producer's worker dies unexpectedly (this is fatal, and
+-- should never happen).
+data ProducerWorkerDied
+  = ProducerWorkerDied
+  deriving (Typeable, Show, Eq)
+
+instance Exception ProducerWorkerDied
+
+data InvalidProducerKit
+  = InvalidConcurrentConsumerCount
+  -- ^ Thrown when 'pkMaxConcurrency' is set with an invalid value.
+  deriving (Typeable, Show, Eq)
+
+instance Exception InvalidProducerKit
 
 type MonadProducerInternal m
   = ( MonadIO m
