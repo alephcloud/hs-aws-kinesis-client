@@ -82,15 +82,14 @@ kkManager = lens _kkManager $ \kk mgr → kk { _kkManager = mgr }
 -- | Run a Kinesis request.
 --
 runKinesis
-  ∷ ( MonadIO m
-    , Aws.ServiceConfiguration req ~ Kin.KinesisConfiguration
+  ∷ ( Aws.ServiceConfiguration req ~ Kin.KinesisConfiguration
     , Aws.Transaction req resp
     )
   ⇒ KinesisKit
   → req
-  → m resp
+  → IO resp
 runKinesis KinesisKit{..} =
-  liftIO ∘ runResourceT ∘
+  runResourceT ∘
     Aws.pureAws
       _kkConfiguration
       _kkKinesisConfiguration
@@ -115,7 +114,7 @@ fetchShardsConduit kit streamName =
           , Kin.describeStreamStreamName = streamName
           }
     resp@(Kin.DescribeStreamResponse Kin.StreamDescription{..}) ←
-      lift $ runKinesis kit req
+      liftIO $ runKinesis kit req
     yield `mapM_` streamDescriptionShards
     void ∘ traverse (leftover ∘ Just) $
       Kin.describeStreamExclusiveStartShardId =<<
