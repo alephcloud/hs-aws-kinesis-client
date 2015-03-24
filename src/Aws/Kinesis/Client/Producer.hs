@@ -92,6 +92,7 @@ import Control.Concurrent.STM.TBMQueue
 import Control.Exception.Enclosed
 import Control.Exception.Lifted
 import Control.Lens
+import Control.Lens.Action
 import Control.Monad
 import Control.Monad.Codensity
 import Control.Monad.Reader
@@ -530,6 +531,34 @@ exhaustTBMQueue q = do
       exhaustTBMQueue q
     _ → return ()
 
+producerWorker
+  ∷ ( MonadIO m
+    , MonadBaseControl IO m
+    )
+  ⇒ ProducerKit
+  → Source m MessageQueueItem
+  → m ()
+producerWorker kit source = do
+  let
+    chunkingPolicy = ChunkingPolicy
+      { _cpMaxChunkSize = (kit ^. pkBatchPolicy ∘ bpBatchSize) * (kit ^. pkMaxConcurrency)
+      , _cpThrottlingDelay = 5000000
+      }
+
+  chunkSource chunkingPolicy source
+    $$ sendMessagesSink kit
+
+runWithTimeout
+  ∷ ( MonadIO m
+    , MonadBaseControl IO m
+    )
+  ⇒ Int -- ^ timeout in microseconds
+  → m a
+  → m (Maybe a)
+runWithTimeout δt m = do
+  race (threadDelay δt) m
+    ^!? acts ∘ _Right
+
 -- | This constructs a 'KinesisProducer' and closes it when you have done with
 -- it. This is equivalent to 'withKinesisProducer', but replaces the
 -- continuation with a return in 'Codensity'.
@@ -553,35 +582,25 @@ managedKinesisProducer kit = do
       , _kpRetryPolicy = kit ^. pkRetryPolicy
       }
 
-    chunkingPolicy = ChunkingPolicy
-      { _cpMaxChunkSize = (kit ^. pkBatchPolicy ∘ bpBatchSize) * (kit ^. pkMaxConcurrency)
-      , _cpThrottlingDelay = 5000000
-      }
-
     -- TODO: this 'forever' is only here to restart if we get killed.
     -- Replace with proper error handling.
     workerLoop ∷ m () =
-      forever $
-        chunkSource chunkingPolicy (sourceTBMQueue messageQueue)
-          $$ sendMessagesSink kit
+      forever $ producerWorker kit $ sourceTBMQueue messageQueue
+
+    flushQueue =
+      producerWorker kit ∘ CL.sourceList
+        =≪ liftIO (atomically $ exhaustTBMQueue messageQueue $$ CL.consume)
 
     cleanupWorker h = do
       liftIO ∘ atomically $ closeTBMQueue messageQueue
 
-      let
-        flushQueue = do
-          leftovers ← liftIO ∘ atomically $
-            exhaustTBMQueue messageQueue
-              $$ CL.consume
-          chunkSource chunkingPolicy (CL.sourceList leftovers)
-            $$ sendMessagesSink kit
-
       case _pkCleanupTimeout kit of
         Just timeout →
-          race (threadDelay $ 1000 * timeout) flushQueue ≫= \case
-            Left () → throw ProducerCleanupTimedOut
-            Right () → return ()
-        Nothing → flushQueue
+          runWithTimeout (1000 * timeout) flushQueue ≫=
+            maybe (throw ProducerCleanupTimedOut) return
+        Nothing →
+          flushQueue
+
       cancel h
 
   workerHandle ← Codensity $ bracket (async workerLoop) cleanupWorker
