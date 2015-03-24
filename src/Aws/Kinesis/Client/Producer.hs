@@ -590,7 +590,7 @@ managedKinesisProducer kit = do
         -- if `inner` terminates first, cancel the worker and clean up
         cancel workerHandle
         return r
-      Right ee →
+      Right (ee ∷ Either SomeException ()) →
         -- if the worker has died first, report the error
         throw $ either id (\_ → toException ProducerWorkerDied) ee
 
