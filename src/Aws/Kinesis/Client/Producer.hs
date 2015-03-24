@@ -94,6 +94,7 @@ import Control.Monad
 import Control.Monad.Codensity
 import Control.Monad.Reader
 import Control.Monad.Trans.Control
+import Control.Monad.Unicode
 import Data.Conduit
 import Data.Conduit.TQueue
 import qualified Data.Conduit.List as CL
@@ -220,6 +221,10 @@ data ProducerKit
 
   , _pkMaxConcurrency ∷ {-# UNPACK #-} !Int
   -- ^ The number of requests to run concurrently (minimum: 1).
+
+  , _pkCleanupTimeout ∷ !(Maybe Int)
+  -- ^ The timeout in milliseconds, after which the producer's cleanup routine
+  -- will terminate, finished or not, throwing 'ProducerCleanupTimedOut'.
   }
 
 -- | A lens for '_pkKinesisKit'.
@@ -279,6 +284,9 @@ data ProducerError
 
   | ProducerWorkerDied
   -- ^ Thrown when the producer's worker dies unexpectedly (this is fatal).
+
+  | ProducerCleanupTimedOut
+  -- ^ Thrown when the producer's cleanup routine takes longer than the configured timeout.
 
   deriving (Typeable, Show)
 
@@ -560,18 +568,28 @@ managedKinesisProducer kit = do
 
     -- TODO: this 'forever' is only here to restart if we get killed.
     -- Replace with proper error handling.
-    workerLoop ∷ m () = flip runReaderT kit ∘ forever $
-      chunkSource chunkingPolicy (sourceTBMQueue messageQueue)
-        $$ sendMessagesSink
+    workerLoop ∷ m () =
+      flip runReaderT kit ∘ forever $
+        chunkSource chunkingPolicy (sourceTBMQueue messageQueue)
+          $$ sendMessagesSink
 
     cleanupWorker h = do
       liftIO ∘ atomically $ closeTBMQueue messageQueue
-      flip runReaderT kit $ do
-        leftovers ← liftIO ∘ atomically $
-          exhaustTBMQueue messageQueue
-            $$ CL.consume
-        chunkSource chunkingPolicy (CL.sourceList leftovers)
-          $$ sendMessagesSink
+
+      let
+        flushQueue = flip runReaderT kit $ do
+          leftovers ← liftIO ∘ atomically $
+            exhaustTBMQueue messageQueue
+              $$ CL.consume
+          chunkSource chunkingPolicy (CL.sourceList leftovers)
+            $$ sendMessagesSink
+
+      case _pkCleanupTimeout kit of
+        Just timeout →
+          race (threadDelay $ 1000 * timeout) flushQueue ≫= \case
+            Left () → throw ProducerCleanupTimedOut
+            Right () → return ()
+        Nothing → flushQueue
       cancel h
 
   workerHandle ← managedBracket (async workerLoop) cleanupWorker
