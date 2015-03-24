@@ -563,7 +563,7 @@ managedKinesisProducer kit = do
     workerLoop ∷ IO () =
       forever $ producerWorker kit $ sourceTBMQueue messageQueue
 
-    flushQueue ∷ IO () =
+    flushQueue =
       producerWorker kit ∘ CL.sourceList
         =≪ atomically (exhaustTBMQueue messageQueue $$ CL.consume)
 
