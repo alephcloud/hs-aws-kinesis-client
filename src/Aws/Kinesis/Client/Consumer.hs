@@ -230,27 +230,27 @@ withKinesisConsumer kit inner = do
   let batchSize = kit ^. ckBatchSize
   messageQueue ← liftIO ∘ newTBQueueIO $ batchSize * 10
 
-  state ← updateStreamState kit CR.empty ≫= liftIO ∘ newTVarIO
+  state ← liftIO $ updateStreamState kit CR.empty ≫= newTVarIO
 
   let
     reshardingLoop =
-      forever ∘ handle (\(SomeException _) → liftIO $ threadDelay 3000000) $ do
-        liftIO (readTVarIO state)
+      forever ∘ handle (\(SomeException _) → threadDelay 3000000) $ do
+        readTVarIO state
           ≫= updateStreamState kit
-          ≫= liftIO ∘ atomically ∘ writeTVar state
-        liftIO $ threadDelay 10000000
+          ≫= atomically ∘ writeTVar state
+        threadDelay 10000000
 
     producerLoop =
-      forever ∘ handle (\(SomeException _) → liftIO $ threadDelay 2000000) $ do
+      forever ∘ handle (\(SomeException _) → threadDelay 2000000) $ do
         recordsCount ← replenishMessages kit messageQueue state
-        liftIO ∘ threadDelay $
+        threadDelay $
           case recordsCount of
             0 → 5000000
             _ → 70000
 
-  withAsync reshardingLoop $ \reshardingHandle → do
+  withAsync (liftIO reshardingLoop) $ \reshardingHandle → do
     link reshardingHandle
-    withAsync producerLoop $ \producerHandle → do
+    withAsync (liftIO producerLoop) $ \producerHandle → do
       link producerHandle
       res ← inner $ KinesisConsumer messageQueue state
       return res
@@ -259,10 +259,9 @@ withKinesisConsumer kit inner = do
 -- existing carousel of shard states.
 --
 updateStreamState
-  ∷ MonadIO m
-  ⇒ ConsumerKit
+  ∷ ConsumerKit
   → StreamState
-  → m StreamState
+  → IO StreamState
 updateStreamState ConsumerKit{..} state = do
   let
     existingShardIds = state ^. CR.clList <&> view ssShardId
@@ -302,11 +301,10 @@ updateStreamState ConsumerKit{..} state = do
 -- | Waits for a message queue to be emptied and fills it up again.
 --
 replenishMessages
-  ∷ MonadIO m
-  ⇒ ConsumerKit
+  ∷ ConsumerKit
   → TBQueue MessageQueueItem
   → TVar StreamState
-  → m Int
+  → IO Int
 replenishMessages ConsumerKit{..} messageQueue shardsVar = do
   liftIO ∘ atomically ∘ awaitQueueEmpty $ messageQueue
   (shard, iterator) ← liftIO ∘ atomically $ do

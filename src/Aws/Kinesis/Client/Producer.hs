@@ -351,12 +351,9 @@ data ChunkingPolicy
 -- 'ChunkingPolicy'.
 --
 chunkedSourceTBMQueue
-  ∷ ( MonadIO m
-    , MonadBaseControl IO m
-    )
-  ⇒ ChunkingPolicy
+  ∷ ChunkingPolicy
   → TBMQueue α
-  → Source m [α]
+  → Source IO [α]
 chunkedSourceTBMQueue bp@ChunkingPolicy{..} q = do
   terminateNow ← liftIO ∘ atomically $ isClosedTBMQueue q
   unless terminateNow $ do
@@ -373,12 +370,9 @@ chunkedSourceTBMQueue bp@ChunkingPolicy{..} q = do
 -- 'ChunkingPolicy'.
 --
 chunkSource
-  ∷ ( MonadIO m
-    , MonadBaseControl IO m
-    )
-  ⇒ ChunkingPolicy
-  → Source m α
-  → Source m [α]
+  ∷ ChunkingPolicy
+  → Source IO α
+  → Source IO [α]
 chunkSource cp src = do
   queue ← liftIO $ newTBMQueueIO $ _cpMaxChunkSize cp
   worker ← lift ∘ async $ src $$+ sinkTBMQueue queue True
@@ -391,11 +385,8 @@ chunkSource cp src = do
 -- @PutRecord@ endpoint.
 --
 concurrentPutRecordSink
-  ∷ ( MonadIO m
-    , MonadBaseControl IO m
-    )
-  ⇒ ProducerKit
-  → Sink [MessageQueueItem] m ()
+  ∷ ProducerKit
+  → Sink [MessageQueueItem] IO ()
 concurrentPutRecordSink kit@ProducerKit{..} = do
   awaitForever $ \messages → do
     lift ∘ flip (mapConcurrentlyN _pkMaxConcurrency 100) messages $ \m → do
@@ -406,11 +397,8 @@ concurrentPutRecordSink kit@ProducerKit{..} = do
 -- this is a conduit in order to restore failed messages as leftovers.
 --
 putRecordSink
-  ∷ ( MonadIO m
-    , MonadBaseControl IO m
-    )
-  ⇒ ProducerKit
-  → Sink MessageQueueItem m ()
+  ∷ ProducerKit
+  → Sink MessageQueueItem IO ()
 putRecordSink ProducerKit{..} = do
   awaitForever $ \item → do
     when (messageQueueItemIsEligible item) $ do
@@ -443,11 +431,8 @@ splitEvery n list = first : splitEvery n rest
 -- This is a conduit in order to restore failed messages as leftovers.
 --
 putRecordsSink
-  ∷ ( MonadIO m
-    , MonadBaseControl IO m
-    )
-  ⇒ ProducerKit
-  → Sink [MessageQueueItem] m ()
+  ∷ ProducerKit
+  → Sink [MessageQueueItem] IO ()
 putRecordsSink ProducerKit{..} = do
   let batchSize = _pkBatchPolicy ^. bpBatchSize
 
@@ -483,11 +468,8 @@ putRecordsSink ProducerKit{..} = do
            & filter messageQueueItemIsEligible
 
 sendMessagesSink
-  ∷ ( MonadIO m
-    , MonadBaseControl IO m
-    )
-  ⇒ ProducerKit
-  → Sink [MessageQueueItem] m ()
+  ∷ ProducerKit
+  → Sink [MessageQueueItem] IO ()
 sendMessagesSink kit@ProducerKit{..} = do
   case _pkBatchPolicy ^. bpEndpoint of
     PutRecordsEndpoint → putRecordsSink kit
@@ -532,12 +514,9 @@ exhaustTBMQueue q = do
     _ → return ()
 
 producerWorker
-  ∷ ( MonadIO m
-    , MonadBaseControl IO m
-    )
-  ⇒ ProducerKit
-  → Source m MessageQueueItem
-  → m ()
+  ∷ ProducerKit
+  → Source IO MessageQueueItem
+  → IO ()
 producerWorker kit source = do
   let
     chunkingPolicy = ChunkingPolicy
@@ -549,12 +528,9 @@ producerWorker kit source = do
     $$ sendMessagesSink kit
 
 runWithTimeout
-  ∷ ( MonadIO m
-    , MonadBaseControl IO m
-    )
-  ⇒ Int -- ^ timeout in microseconds
-  → m a
-  → m (Maybe a)
+  ∷ Int -- ^ timeout in microseconds
+  → IO a
+  → IO (Maybe a)
 runWithTimeout δt m = do
   race (threadDelay δt) m
     ^!? acts ∘ _Right
@@ -584,17 +560,17 @@ managedKinesisProducer kit = do
 
     -- TODO: this 'forever' is only here to restart if we get killed.
     -- Replace with proper error handling.
-    workerLoop ∷ m () =
+    workerLoop ∷ IO () =
       forever $ producerWorker kit $ sourceTBMQueue messageQueue
 
-    flushQueue =
+    flushQueue ∷ IO () =
       producerWorker kit ∘ CL.sourceList
-        =≪ liftIO (atomically $ exhaustTBMQueue messageQueue $$ CL.consume)
+        =≪ atomically (exhaustTBMQueue messageQueue $$ CL.consume)
 
     cleanupWorker h = do
       liftIO ∘ atomically $ closeTBMQueue messageQueue
 
-      case _pkCleanupTimeout kit of
+      liftIO $ case _pkCleanupTimeout kit of
         Just timeout →
           runWithTimeout (1000 * timeout) flushQueue ≫=
             maybe (throw ProducerCleanupTimedOut) return
@@ -603,7 +579,7 @@ managedKinesisProducer kit = do
 
       cancel h
 
-  workerHandle ← Codensity $ bracket (async workerLoop) cleanupWorker
+  workerHandle ← Codensity $ bracket (async (liftIO workerLoop)) cleanupWorker
 
   Codensity $ \inner → do
     result ← race (inner producer) (waitCatch workerHandle)
@@ -633,15 +609,12 @@ withKinesisProducer =
 -- | map at most n actions concurrently
 --
 mapConcurrentlyN
-  ∷ ( MonadIO m
-    , MonadBaseControl IO m
-    , Traversable t
-    )
+  ∷ Traversable t
   ⇒ Int -- ^ number of concurrent actions
   → Int -- ^ startup delay between actions in milliseconds
-  → (a → m b)
+  → (a → IO b)
   → t a
-  → m (t b)
+  → IO (t b)
 mapConcurrentlyN n delay f t = do
   sem ← liftIO $ newQSem n
   mapConcurrently (run sem) t_
