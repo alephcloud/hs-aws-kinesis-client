@@ -96,6 +96,7 @@ import Control.Monad
 import Control.Monad.Codensity
 import Control.Monad.Reader
 import Control.Monad.Trans.Control
+import Control.Monad.Trans.Except
 import Control.Monad.Unicode
 import Data.Conduit
 import Data.Conduit.TQueue
@@ -495,16 +496,14 @@ sendMessagesSink kit@ProducerKit{..} = do
 -- 'MessageNotEnqueued' exception will be thrown.
 --
 writeProducer
-  ∷ ( MonadIO m
-    , MonadBaseControl IO m
-    )
+  ∷ MonadIO m
   ⇒ KinesisProducer
   → Message
   → m (Either WriteProducerException ())
 writeProducer producer !msg =
-  handle (return ∘ Left) ∘ fmap Right $ do
+  runExceptT $ do
     when (T.length msg > MaxMessageSize) $
-      return $ throw MessageTooLarge
+      throwE MessageTooLarge
 
     gen ← liftIO R.newStdGen
     result ← liftIO ∘ atomically $ do
@@ -515,7 +514,7 @@ writeProducer producer !msg =
         }
     case result of
       Just True → return ()
-      _ → throw $ MessageNotEnqueued msg
+      _ → throwE $ MessageNotEnqueued msg
 
 -- | This is a 'Source' that returns all the items presently in a queue: it
 -- terminates when the queue is empty.

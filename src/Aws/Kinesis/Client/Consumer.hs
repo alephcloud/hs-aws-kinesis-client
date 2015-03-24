@@ -259,9 +259,7 @@ withKinesisConsumer kit inner = do
 -- existing carousel of shard states.
 --
 updateStreamState
-  ∷ ( MonadIO m
-    , MonadBaseControl IO m
-    )
+  ∷ MonadIO m
   ⇒ ConsumerKit
   → StreamState
   → m StreamState
@@ -304,9 +302,7 @@ updateStreamState ConsumerKit{..} state = do
 -- | Waits for a message queue to be emptied and fills it up again.
 --
 replenishMessages
-  ∷ ( MonadIO m
-    , MonadBaseControl IO m
-    )
+  ∷ MonadIO m
   ⇒ ConsumerKit
   → TBQueue MessageQueueItem
   → TVar StreamState
@@ -335,9 +331,7 @@ replenishMessages ConsumerKit{..} messageQueue shardsVar = do
 -- | Await and read a single record from the consumer.
 --
 readConsumer
-  ∷ ( MonadIO m
-    , MonadBaseControl IO m
-    )
+  ∷ MonadIO m
   ⇒ KinesisConsumer
   → m Kin.Record
 readConsumer consumer =
@@ -350,9 +344,7 @@ readConsumer consumer =
 -- then 'Nothing' will be returned.
 --
 tryReadConsumer
-  ∷ ( MonadIO m
-    , MonadBaseControl IO m
-    )
+  ∷ MonadIO m
   ⇒ KinesisConsumer
   → m (Maybe Kin.Record)
 tryReadConsumer consumer =
@@ -365,9 +357,7 @@ tryReadConsumer consumer =
 -- | A conduit for getting records.
 --
 consumerSource
-  ∷ ( MonadIO m
-    , MonadBaseControl IO m
-    )
+  ∷ MonadIO m
   ⇒ KinesisConsumer
   → Source m Kin.Record
 consumerSource consumer =
@@ -378,9 +368,7 @@ consumerSource consumer =
 -- | Get the last read sequence number at each shard.
 --
 consumerStreamState
-  ∷ ( MonadIO m
-    , MonadBaseControl IO m
-    )
+  ∷ MonadIO m
   ⇒ KinesisConsumer
   → m SavedStreamState
 consumerStreamState consumer =
