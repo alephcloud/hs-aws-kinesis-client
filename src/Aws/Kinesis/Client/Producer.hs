@@ -369,8 +369,11 @@ chunkedSourceTBMQueue
   → TBMQueue α
   → Source IO [α]
 chunkedSourceTBMQueue cp@ChunkingPolicy{..} q = do
-  terminateNow ← liftIO ∘ atomically $ isClosedTBMQueue q
-  unless terminateNow $ do
+  shouldTerminate ←
+    liftIO ∘ atomically $
+      (&&) <$> isClosedTBMQueue q <*> isEmptyTBMQueue q
+
+  unless shouldTerminate $ do
     items ← lift $ takeTBMQueueWithTimeout _cpMaxChunkSize _cpMinChunkingInterval q
     unless (null items) $ do
       yield items
