@@ -339,12 +339,14 @@ takeTBMQueueWithTimeout n timeout q = do
 
     go xs
       | length xs ≥ n = return xs
-      | otherwise =
-          Left <$> readTBMQueue q <|> Right <$> readTMVar timedOutVar
-            ≫= either (go ∘ maybe xs (:xs)) (\_ → return xs)
+      | otherwise = do
+          res ← Left <$> readTBMQueue q <|> Right <$> readTMVar timedOutVar
+          case res of
+            Left mx → maybe (return xs) (go ∘ (:xs)) mx
+            Right () → return xs
 
   withAsync timeoutAction $ \h → do
-    xs ← atomically (go [])
+    xs ← atomically $ go []
     xs <$ cancel h
 
 -- | A policy for chunking the contents of the message queue.
