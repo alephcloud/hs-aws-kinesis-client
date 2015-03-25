@@ -97,10 +97,7 @@ import Control.Monad.Codensity
 import Control.Monad.Reader
 import Control.Monad.Trans.Control
 import Control.Monad.Trans.Except
-import Control.Monad.Trans.Resource
-import Control.Monad.Unicode
 import Data.Conduit
-import Data.Conduit.TQueue
 import qualified Data.Conduit.List as CL
 import Data.Maybe
 import qualified Data.Text as T
@@ -532,7 +529,9 @@ managedKinesisProducer kit = do
         chunkedSourceTBMQueue chunkingPolicy messageQueue
           $$ sendMessagesSink kit
       case result of
-        Left exn → workerLoop
+        Left exn → do
+          hPutStrLn stderr $ "Respawning Kinesis producer worker loop after exception: " ++ show exn
+          workerLoop
         Right () → return ()
 
     cleanupWorker _ = do
