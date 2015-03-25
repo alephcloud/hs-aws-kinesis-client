@@ -95,7 +95,7 @@ fetchCredentials = do
   view clioUseInstanceMetadata ≫= \case
     True →
       loadCredentialsFromInstanceMetadata
-        ≫= maybe (throw NoInstanceMetadataCredentials) return
+        ≫= maybe (throwIO NoInstanceMetadataCredentials) return
     False →
       view clioAccessKeys ≫= \case
         Just (CredentialsFromAccessKeys aks) →
@@ -104,9 +104,9 @@ fetchCredentials = do
             (aks ^. akSecretAccessKey)
         Just (CredentialsFromFile path) →
           loadCredentialsFromFile path credentialsDefaultKey
-            ≫= maybe (throw MissingCredentials) return
+            ≫= maybe (throwIO MissingCredentials) return
         Nothing →
-          throw MissingCredentials
+          throwIO MissingCredentials
 
 app
   ∷ MonadCLI m
@@ -121,7 +121,7 @@ app = do
         code ← catch (Just <$> BL8.readFile path) $ \case
           exn
             | isDoesNotExistError exn → return Nothing
-            | otherwise → throw exn
+            | otherwise → throwIO exn
         traverse (either (fail ∘ ("Invalid saved state: " ⊕)) return) $
           A.eitherDecode <$> code
       Nothing → return Nothing

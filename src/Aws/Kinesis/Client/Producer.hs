@@ -508,7 +508,7 @@ managedKinesisProducer
   → Codensity m KinesisProducer
 managedKinesisProducer kit = do
   when (kit ^. pkMaxConcurrency < 1) ∘ lift $
-    throw InvalidConcurrentConsumerCount
+    throwIO InvalidConcurrentConsumerCount
 
   messageQueue ← liftIO ∘ newTBMQueueIO $ kit ^. pkMessageQueueBounds
 
@@ -551,17 +551,17 @@ managedKinesisProducer kit = do
                 result' ← waitEitherCatchCancel timeoutHandle workerHandle
                 case result' of
                   Left (_timeoutResult ∷ Either SomeException ()) →
-                    throw ProducerCleanupTimedOut
+                    throwIO ProducerCleanupTimedOut
                   Right (workerResult ∷ Either SomeException ()) →
-                    throw ∘ ProducerWorkerDied $ workerResult ^? _Left
+                    throwIO ∘ ProducerWorkerDied $ workerResult ^? _Left
             Nothing → do
               liftIO $ atomically $ closeTBMQueue messageQueue
               wait workerHandle ∷ m ()
 
-          either throw return innerResult
+          either throwIO return innerResult
 
         Right (workerResult ∷ Either SomeException ()) →
-          throw ∘ ProducerWorkerDied $ workerResult ^? _Left
+          throwIO ∘ ProducerWorkerDied $ workerResult ^? _Left
 
 -- | This constructs a 'KinesisProducer' and closes it when you have done with
 -- it.
