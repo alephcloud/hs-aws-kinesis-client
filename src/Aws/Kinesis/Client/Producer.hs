@@ -97,6 +97,7 @@ import Control.Monad.Codensity
 import Control.Monad.Reader
 import Control.Monad.Trans.Control
 import Control.Monad.Trans.Except
+import Control.Monad.Unicode
 import Data.Conduit
 import qualified Data.Conduit.List as CL
 import Data.Maybe
@@ -327,24 +328,18 @@ takeTBMQueueWithTimeout
   → TBMQueue α
   → IO [α]
 takeTBMQueueWithTimeout n timeout q = do
-  timedOutVar ← newEmptyTMVarIO
+  timedOutVar ← registerDelay timeout
 
   let
-    timeoutAction = do
-      threadDelay timeout
-      atomically $ putTMVar timedOutVar ()
-
     go xs
       | length xs ≥ n = return xs
       | otherwise = do
-          res ← Left <$> readTBMQueue q <|> Right <$> readTMVar timedOutVar
+          res ← Left <$> readTBMQueue q <|> Right <$> (readTVar timedOutVar ≫= check)
           case res of
             Left mx → maybe (return xs) (go ∘ (:xs)) mx
             Right () → return xs
 
-  withAsync timeoutAction $ \h → do
-    xs ← atomically $ go []
-    xs <$ cancel h
+  atomically $ go []
 
 -- | A policy for chunking the contents of the message queue.
 --
