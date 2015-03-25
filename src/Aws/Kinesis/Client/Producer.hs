@@ -92,12 +92,12 @@ import Control.Concurrent.STM.TBMQueue
 import Control.Exception.Enclosed
 import Control.Exception.Lifted
 import Control.Lens
-import Control.Lens.Action
 import Control.Monad
 import Control.Monad.Codensity
 import Control.Monad.Reader
 import Control.Monad.Trans.Control
 import Control.Monad.Trans.Except
+import Control.Monad.Trans.Resource
 import Control.Monad.Unicode
 import Data.Conduit
 import Data.Conduit.TQueue
@@ -321,19 +321,31 @@ generatePartitionKey gen =
   Kin.partitionKey (T.pack name)
     & either (error ∘ T.unpack) id
 
--- | This will take up to @n@ items from a 'TBMQueue'.
+-- | This will take up to @n@ items from a 'TBMQueue', with a timeout.
 --
-takeTBMQueue
-  ∷ Int
+takeTBMQueueWithTimeout
+  ∷ ∀ α
+  . Int -- ^ number of items to get
+  → Int -- ^ timeout in microseconds
   → TBMQueue α
-  → STM [α]
-takeTBMQueue n q
-  | n <= 0 = return []
-  | otherwise = do
-      res ← tryReadTBMQueue q
-      case res of
-        Just (Just x) → (x:) <$> takeTBMQueue (n - 1) q
-        _ → return []
+  → IO [α]
+takeTBMQueueWithTimeout n timeout q = do
+  timedOutVar ← newEmptyTMVarIO
+
+  let
+    timeoutAction = do
+      threadDelay timeout
+      atomically $ putTMVar timedOutVar ()
+
+    go xs
+      | length xs ≥ n = return xs
+      | otherwise =
+          Left <$> readTBMQueue q <|> Right <$> readTMVar timedOutVar
+            ≫= either (go ∘ maybe xs (:xs)) (\_ → return xs)
+
+  withAsync timeoutAction $ \h → do
+    xs ← atomically (go [])
+    xs <$ cancel h
 
 -- | A policy for chunking the contents of the message queue.
 --
@@ -354,17 +366,14 @@ chunkedSourceTBMQueue
   ∷ ChunkingPolicy
   → TBMQueue α
   → Source IO [α]
-chunkedSourceTBMQueue bp@ChunkingPolicy{..} q = do
+chunkedSourceTBMQueue cp@ChunkingPolicy{..} q = do
   terminateNow ← liftIO ∘ atomically $ isClosedTBMQueue q
   unless terminateNow $ do
-    items ← liftIO ∘ atomically $ takeTBMQueue _cpMaxChunkSize q
+    items ← lift $ takeTBMQueueWithTimeout _cpMaxChunkSize _cpMinChunkingInterval q
     unless (null items) $ do
       yield items
 
-    when (length items < _cpMaxChunkSize) $
-      threadDelay _cpMinChunkingInterval
-
-    chunkedSourceTBMQueue bp q
+    chunkedSourceTBMQueue cp q
 
 -- | Transform a 'Source' into a chunked 'Source' according to some
 -- 'ChunkingPolicy'.
@@ -374,12 +383,16 @@ chunkSource
   → Source IO α
   → Source IO [α]
 chunkSource cp src = do
-  queue ← liftIO $ newTBMQueueIO $ _cpMaxChunkSize cp
-  worker ← lift ∘ async $ src $$+ sinkTBMQueue queue True
-  addCleanup (\_ → cancel worker) $ do
-    lift $ link worker
-    chunkedSourceTBMQueue cp queue
-  return ()
+  queue ← liftIO ∘ newTBMQueueIO $ _cpMaxChunkSize cp
+
+  let
+    worker = do
+      src $$ sinkTBMQueue queue True
+      atomically $ closeTBMQueue queue
+
+  transPipe runResourceT ∘ bracketP (async worker) cancel $ \workerHandle → do
+    link workerHandle
+    transPipe liftIO $ chunkedSourceTBMQueue cp queue
 
 -- | A conduit for concurently sending multiple records to Kinesis using the
 -- @PutRecord@ endpoint.
@@ -499,42 +512,6 @@ writeProducer producer !msg =
       Just written → unless written $ throwE ProducerQueueFull
       Nothing → throwE $ ProducerQueueClosed
 
--- | This is a 'Source' that returns all the items presently in a queue: it
--- terminates when the queue is empty.
---
-exhaustTBMQueue
-  ∷ TBMQueue α
-  → Source STM α
-exhaustTBMQueue q = do
-  mx ← lift $ tryReadTBMQueue q
-  case mx of
-    Just (Just x) → do
-      yield x
-      exhaustTBMQueue q
-    _ → return ()
-
-producerWorker
-  ∷ ProducerKit
-  → Source IO MessageQueueItem
-  → IO ()
-producerWorker kit source = do
-  let
-    chunkingPolicy = ChunkingPolicy
-      { _cpMaxChunkSize = (kit ^. pkBatchPolicy ∘ bpBatchSize) * (kit ^. pkMaxConcurrency)
-      , _cpMinChunkingInterval = 5000000
-      }
-
-  chunkSource chunkingPolicy source
-    $$ sendMessagesSink kit
-
-runWithTimeout
-  ∷ Int -- ^ timeout in microseconds
-  → IO a
-  → IO (Maybe a)
-runWithTimeout δt m = do
-  race (threadDelay δt) m
-    ^!? acts ∘ _Right
-
 -- | This constructs a 'KinesisProducer' and closes it when you have done with
 -- it. This is equivalent to 'withKinesisProducer', but replaces the
 -- continuation with a return in 'Codensity'.
@@ -558,40 +535,42 @@ managedKinesisProducer kit = do
       , _kpRetryPolicy = kit ^. pkRetryPolicy
       }
 
-    -- TODO: this 'forever' is only here to restart if we get killed.
-    -- Replace with proper error handling.
-    workerLoop ∷ IO () =
-      forever $ producerWorker kit $ sourceTBMQueue messageQueue
+    chunkingPolicy = ChunkingPolicy
+      { _cpMaxChunkSize = (kit ^. pkBatchPolicy ∘ bpBatchSize) * (kit ^. pkMaxConcurrency)
+      , _cpMinChunkingInterval = 5000000
+      }
 
-    flushQueue =
-      producerWorker kit ∘ CL.sourceList
-        =≪ atomically (exhaustTBMQueue messageQueue $$ CL.consume)
+    -- TODO: figure out what to do if this worker gets killed (replace the 'forever')
+    workerLoop ∷ IO () = forever $
+      chunkSource chunkingPolicy (sourceTBMQueue messageQueue)
+        $$ sendMessagesSink kit
 
-    cleanupWorker h = do
-      liftIO ∘ atomically $ closeTBMQueue messageQueue
+    cleanupWorker _ = do
+      atomically $ closeTBMQueue messageQueue
 
-      liftIO $ case _pkCleanupTimeout kit of
-        Just timeout →
-          runWithTimeout (1000 * timeout) flushQueue ≫=
-            maybe (throw ProducerCleanupTimedOut) return
-        Nothing →
-          flushQueue
-
-      cancel h
-
-  workerHandle ← Codensity $ bracket (async (liftIO workerLoop)) cleanupWorker
+  workerHandle ← Codensity $ bracket (async (liftIO workerLoop)) (liftIO ∘ cleanupWorker)
 
   Codensity $ \inner → do
-    result ← race (inner producer) (waitCatch workerHandle)
-    case result of
-      Left r → do
-        -- if `inner` terminates first, cancel the worker and clean up
-        cancel workerHandle
-        return r
-      Right (ee ∷ Either SomeException ()) →
-        -- if the worker has died first, report the error
-        throw $ either id (\_ → toException ProducerWorkerDied) ee
+    withAsync (inner producer) $ \innerHandle → do
+      result ← waitEitherCatch innerHandle workerHandle
+      case result of
+        Left innerResult → do
+          case _pkCleanupTimeout kit of
+            Just timeout →
+              withAsync (threadDelay $ 1000 * timeout) $ \timeoutHandle → do
+                result' ← waitEitherCatchCancel timeoutHandle workerHandle
+                case result' of
+                  Left (_timeoutResult ∷ Either SomeException ()) →
+                    throw ProducerCleanupTimedOut
+                  Right workerResult →
+                    either throw (\() → throw ProducerWorkerDied) workerResult
+            Nothing →
+              wait workerHandle ∷ m ()
 
+          either throw return innerResult
+
+        Right (workerResult ∷ Either SomeException ()) →
+          either throw (\() → throw ProducerWorkerDied) workerResult
 
 -- | This constructs a 'KinesisProducer' and closes it when you have done with
 -- it.
