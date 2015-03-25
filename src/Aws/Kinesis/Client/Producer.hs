@@ -298,8 +298,8 @@ instance Exception ProducerCleanupTimedOut
 -- | Thrown when the producer's worker dies unexpectedly (this is fatal, and
 -- should never happen).
 data ProducerWorkerDied
-  = ProducerWorkerDied
-  deriving (Typeable, Show, Eq)
+  = ProducerWorkerDied (Maybe SomeException)
+  deriving (Typeable, Show)
 
 instance Exception ProducerWorkerDied
 
@@ -562,15 +562,15 @@ managedKinesisProducer kit = do
                 case result' of
                   Left (_timeoutResult ∷ Either SomeException ()) →
                     throw ProducerCleanupTimedOut
-                  Right workerResult →
-                    either throw (\() → throw ProducerWorkerDied) workerResult
+                  Right (workerResult ∷ Either SomeException ()) →
+                    throw ∘ ProducerWorkerDied $ workerResult ^? _Left
             Nothing →
               wait workerHandle ∷ m ()
 
           either throw return innerResult
 
         Right (workerResult ∷ Either SomeException ()) →
-          either throw (\() → throw ProducerWorkerDied) workerResult
+          throw ∘ ProducerWorkerDied $ workerResult ^? _Left
 
 -- | This constructs a 'KinesisProducer' and closes it when you have done with
 -- it.
