@@ -380,25 +380,6 @@ chunkedSourceTBMQueue cp@ChunkingPolicy{..} q = do
 
     chunkedSourceTBMQueue cp q
 
--- | Transform a 'Source' into a chunked 'Source' according to some
--- 'ChunkingPolicy'.
---
-chunkSource
-  ∷ ChunkingPolicy
-  → Source IO α
-  → Source IO [α]
-chunkSource cp src = do
-  queue ← liftIO ∘ newTBMQueueIO $ _cpMaxChunkSize cp
-
-  let
-    worker = do
-      src $$ sinkTBMQueue queue True
-      atomically $ closeTBMQueue queue
-
-  transPipe runResourceT ∘ bracketP (async worker) cancel $ \workerHandle → do
-    link workerHandle
-    transPipe liftIO $ chunkedSourceTBMQueue cp queue
-
 -- | A conduit for concurently sending multiple records to Kinesis using the
 -- @PutRecord@ endpoint.
 --
@@ -545,10 +526,14 @@ managedKinesisProducer kit = do
       , _cpMinChunkingInterval = 5000000
       }
 
-    -- TODO: figure out what to do if this worker gets killed (replace the 'forever')
-    workerLoop ∷ IO () = forever $
-      chunkSource chunkingPolicy (sourceTBMQueue messageQueue)
-        $$ sendMessagesSink kit
+    -- TODO: figure out better error handling here (such as a limit to respawns)
+    workerLoop ∷ IO () = do
+      result ← tryAny $
+        chunkedSourceTBMQueue chunkingPolicy messageQueue
+          $$ sendMessagesSink kit
+      case result of
+        Left exn → workerLoop
+        Right () → return ()
 
     cleanupWorker _ = do
       atomically $ closeTBMQueue messageQueue
@@ -560,6 +545,7 @@ managedKinesisProducer kit = do
       result ← waitEitherCatch innerHandle workerHandle
       case result of
         Left innerResult → do
+          liftIO $ atomically $ closeTBMQueue messageQueue
           case _pkCleanupTimeout kit of
             Just timeout →
               withAsync (threadDelay $ 1000 * timeout) $ \timeoutHandle → do
@@ -569,7 +555,8 @@ managedKinesisProducer kit = do
                     throw ProducerCleanupTimedOut
                   Right (workerResult ∷ Either SomeException ()) →
                     throw ∘ ProducerWorkerDied $ workerResult ^? _Left
-            Nothing →
+            Nothing → do
+              liftIO $ atomically $ closeTBMQueue messageQueue
               wait workerHandle ∷ m ()
 
           either throw return innerResult
