@@ -233,6 +233,11 @@ withKinesisConsumer kit inner = do
   state ← liftIO $ updateStreamState kit CR.empty ≫= newTVarIO
 
   let
+    -- The "magic" constants used in the loops below are derived from weeks of
+    -- optimizing the Consumer not to cause rate-limiting errors, whilst still
+    -- supporting prompt retrieval of records. It is likely that further
+    -- optimization is possible.
+
     reshardingLoop =
       forever ∘ handle (\(SomeException _) → threadDelay 3000000) $ do
         readTVarIO state
@@ -243,6 +248,7 @@ withKinesisConsumer kit inner = do
     producerLoop =
       forever ∘ handle (\(SomeException _) → threadDelay 2000000) $ do
         recordsCount ← replenishMessages kit messageQueue state
+
         threadDelay $
           case recordsCount of
             0 → 5000000
