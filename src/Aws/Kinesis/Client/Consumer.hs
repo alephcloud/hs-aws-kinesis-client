@@ -48,12 +48,15 @@ module Aws.Kinesis.Client.Consumer
 
   -- * Consumer Environment
 , ConsumerKit(..)
+, makeConsumerKit
+, SavedStreamState
+
+  -- ** Lenses
 , ckKinesisKit
 , ckStreamName
 , ckBatchSize
 , ckIteratorType
 , ckSavedStreamState
-, SavedStreamState
 ) where
 
 import qualified Aws.Kinesis as Kin
@@ -129,6 +132,21 @@ data ConsumerKit
   -- ^ Optionally, an initial stream state. The iterator type in
   -- '_ckIteratorType' will be used for any shards not present in the saved
   -- stream state; otherwise, 'Kin.AfterSequenceNumber' will be used.
+  }
+
+-- | Create a 'ConsumerKit' with default settings (using iterator type
+-- 'Kin.Latest' and a batch size of @200@).
+--
+makeConsumerKit
+  ∷ KinesisKit
+  → Kin.StreamName
+  → ConsumerKit
+makeConsumerKit kinesisKit streamName = ConsumerKit
+  { _ckKinesisKit = kinesisKit
+  , _ckStreamName = streamName
+  , _ckBatchSize = 200
+  , _ckIteratorType = Kin.Latest
+  , _ckSavedStreamState = Nothing
   }
 
 -- | A lens for '_ckKinesisKit'.
