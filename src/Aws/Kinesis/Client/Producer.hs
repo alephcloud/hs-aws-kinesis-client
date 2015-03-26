@@ -327,17 +327,21 @@ takeTBMQueueWithTimeout
   → Int -- ^ timeout in microseconds
   → TBMQueue α
   → IO [α]
-takeTBMQueueWithTimeout n timeout q = do
-  timedOutVar ← registerDelay timeout
+takeTBMQueueWithTimeout n timeoutDelay q = do
+  timedOutVar ← registerDelay timeoutDelay
 
   let
+    readItems xs =
+      readTBMQueue q ≫= \case
+        Nothing → return xs
+        Just x → go (x:xs)
+
+    timeout =
+      readTVar timedOutVar ≫= check
+
     go xs
       | length xs ≥ n = return xs
-      | otherwise = do
-          res ← Left <$> readTBMQueue q <|> Right <$> (readTVar timedOutVar ≫= check)
-          case res of
-            Left mx → maybe (return xs) (go ∘ (:xs)) mx
-            Right () → return xs
+      | otherwise = readItems xs <|> xs <$ timeout
 
   atomically $ go []
 
