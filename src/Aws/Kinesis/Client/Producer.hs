@@ -184,7 +184,7 @@ data MessageQueueItem
   , _mqiPartitionKey ∷ !Kin.PartitionKey
   -- ^ The partition key the message is destined for
 
-  , _mqiRemainingAttempts ∷ !Int
+  , _mqiRemainingAttempts ∷ {-# UNPACK #-} !Int
   -- ^ The number of times remaining to try and publish this message
   } deriving (Eq, Show)
 
