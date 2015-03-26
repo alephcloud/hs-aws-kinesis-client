@@ -53,6 +53,9 @@ module Aws.Kinesis.Client.Producer
 
   -- * Producer Environment
 , ProducerKit(..)
+, makeProducerKit
+
+  -- ** Lenses
 , pkKinesisKit
 , pkStreamName
 , pkBatchPolicy
@@ -228,6 +231,22 @@ data ProducerKit
   , _pkCleanupTimeout ∷ !(Maybe Int)
   -- ^ The timeout in milliseconds, after which the producer's cleanup routine
   -- will terminate, finished or not, throwing 'ProducerCleanupTimedOut'.
+  }
+
+-- | Create a 'ProducerKit' with default settings.
+--
+makeProducerKit
+  ∷ KinesisKit
+  → Kin.StreamName
+  → ProducerKit
+makeProducerKit kinesisKit streamName = ProducerKit
+  { _pkKinesisKit = kinesisKit
+  , _pkStreamName = streamName
+  , _pkBatchPolicy = defaultBatchPolicy
+  , _pkRetryPolicy = defaultRetryPolicy
+  , _pkMessageQueueBounds = 10000
+  , _pkMaxConcurrency = 3
+  , _pkCleanupTimeout = Nothing
   }
 
 -- | A lens for '_pkKinesisKit'.
