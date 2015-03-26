@@ -319,7 +319,9 @@ generatePartitionKey gen =
   Kin.partitionKey (T.pack name)
     & either (error ∘ T.unpack) id
 
--- | This will take up to @n@ items from a 'TBMQueue', with a timeout.
+-- | This will take up to @n@ items from a 'TBMQueue', with a timeout; the
+-- semantics is that we will return as many items up to @n@ as we can get
+-- within the allotted time.
 --
 takeTBMQueueWithTimeout
   ∷ ∀ α
@@ -332,16 +334,25 @@ takeTBMQueueWithTimeout n timeoutDelay q = do
 
   let
     readItems xs =
+      -- if the queue is closed, then return what we have already got;
+      -- otherwise, block until we can read an item from it.
       readTBMQueue q ≫= \case
         Nothing → return xs
         Just x → go (x:xs)
 
     timeout =
+      -- block until the timeout fires
       readTVar timedOutVar ≫= check
 
     go xs
-      | length xs ≥ n = return xs
-      | otherwise = readItems xs <|> xs <$ timeout
+      | length xs ≥ n =
+          -- if we have got enough items, return immediately
+          return xs
+
+      | otherwise =
+          -- either we continue reading from the queue, or we have run out of
+          -- time
+          readItems xs <|> xs <$ timeout
 
   atomically $ go []
 
