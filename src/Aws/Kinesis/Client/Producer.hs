@@ -59,6 +59,7 @@ module Aws.Kinesis.Client.Producer
 , pkRetryPolicy
 , pkMessageQueueBounds
 , pkMaxConcurrency
+, pkCleanupTimeout
 
 -- * Exceptions
 , WriteProducerException(..)
@@ -258,6 +259,11 @@ pkMessageQueueBounds = lens _pkMessageQueueBounds $ \pk qb → pk { _pkMessageQu
 --
 pkMaxConcurrency ∷ Lens' ProducerKit Int
 pkMaxConcurrency = lens _pkMaxConcurrency $ \pk n → pk { _pkMaxConcurrency = n }
+
+-- | A lens for '_pkCleanupTimeout'.
+--
+pkCleanupTimeout ∷ Lens' ProducerKit (Maybe Int)
+pkCleanupTimeout = lens _pkCleanupTimeout $ \pk n → pk { _pkCleanupTimeout = n }
 
 -- | The (abstract) Kinesis producer client.
 --
