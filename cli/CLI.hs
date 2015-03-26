@@ -108,13 +108,29 @@ fetchCredentials = do
         Nothing →
           throwIO MissingCredentials
 
-app
+managedKinesisKit
   ∷ MonadCLI m
-  ⇒ Codensity m ExitCode
-app = do
+  ⇒ Codensity m KinesisKit
+managedKinesisKit = do
   CLIOptions{..} ← ask
   manager ← managedHttpManager
   credentials ← lift fetchCredentials
+  return KinesisKit
+    { _kkManager = manager
+    , _kkConfiguration = Configuration
+         { timeInfo = Timestamp
+         , credentials = credentials
+         , logger = defaultLog Warning
+         }
+    , _kkKinesisConfiguration = defaultKinesisConfiguration _clioRegion
+    }
+
+cliConsumerKit
+  ∷ MonadCLI m
+  ⇒ KinesisKit
+  → m ConsumerKit
+cliConsumerKit kinesisKit = do
+  CLIOptions{..} ← ask
   savedStreamState ←
     case _clioStateIn of
       Just path → liftIO $ do
@@ -125,22 +141,22 @@ app = do
         traverse (either (fail ∘ ("Invalid saved state: " ⊕)) return) $
           A.eitherDecode <$> code
       Nothing → return Nothing
+  return $
+    makeConsumerKit kinesisKit _clioStreamName
+      & ckBatchSize .~ 100
+      & ckIteratorType .~ _clioIteratorType
+      & ckSavedStreamState .~ savedStreamState
 
-  consumer ← managedKinesisConsumer ConsumerKit
-    { _ckKinesisKit = KinesisKit
-        { _kkManager = manager
-        , _kkConfiguration = Configuration
-             { timeInfo = Timestamp
-             , credentials = credentials
-             , logger = defaultLog Warning
-             }
-        , _kkKinesisConfiguration = defaultKinesisConfiguration _clioRegion
-        }
-    , _ckStreamName = _clioStreamName
-    , _ckBatchSize = 100
-    , _ckIteratorType = _clioIteratorType
-    , _ckSavedStreamState = savedStreamState
-    }
+app
+  ∷ MonadCLI m
+  ⇒ Codensity m ExitCode
+app = do
+  CLIOptions{..} ← ask
+
+  consumer ←
+    managedKinesisKit
+      ≫= lift ∘ cliConsumerKit
+      ≫= managedKinesisConsumer
 
   let
     source = consumerSource consumer
