@@ -87,12 +87,12 @@ module Aws.Kinesis.Client.Producer
 
 import qualified Aws.Kinesis as Kin
 import Aws.Kinesis.Client.Common
+import Aws.Kinesis.Client.Queue
 
 import Control.Applicative
 import Control.Concurrent.Async.Lifted
 import Control.Concurrent.Lifted hiding (yield)
 import Control.Concurrent.STM
-import Control.Concurrent.STM.TBMQueue
 import Control.Exception.Enclosed
 import Control.Exception.Lifted
 import Control.Lens
@@ -286,16 +286,16 @@ pkCleanupTimeout = lens _pkCleanupTimeout $ \pk n → pk { _pkCleanupTimeout = n
 
 -- | The (abstract) Kinesis producer client.
 --
-data KinesisProducer
+data KinesisProducer q
   = KinesisProducer
-  { _kpMessageQueue ∷ !(TBMQueue MessageQueueItem)
+  { _kpMessageQueue ∷ !(q MessageQueueItem)
   , _kpRetryPolicy ∷ !RetryPolicy
   }
 
-kpMessageQueue ∷ Getter KinesisProducer (TBMQueue MessageQueueItem)
+kpMessageQueue ∷ Getter (KinesisProducer q) (q MessageQueueItem)
 kpMessageQueue = to _kpMessageQueue
 
-kpRetryPolicy ∷ Getter KinesisProducer RetryPolicy
+kpRetryPolicy ∷ Getter (KinesisProducer q) RetryPolicy
 kpRetryPolicy = to _kpRetryPolicy
 
 data WriteProducerException
@@ -349,10 +349,10 @@ generatePartitionKey gen =
 -- within the allotted time.
 --
 takeTBMQueueWithTimeout
-  ∷ ∀ α
-  . Int -- ^ number of items to get
+  ∷ Queue STM q
+  ⇒ Int -- ^ number of items to get
   → Int -- ^ timeout in microseconds
-  → TBMQueue α
+  → q α
   → IO [α]
 takeTBMQueueWithTimeout n timeoutDelay q = do
   timedOutVar ← registerDelay timeoutDelay
@@ -361,7 +361,7 @@ takeTBMQueueWithTimeout n timeoutDelay q = do
     readItems xs =
       -- if the queue is closed, then return what we have already got;
       -- otherwise, block until we can read an item from it.
-      readTBMQueue q ≫= \case
+      popQueue q ≫= \case
         Nothing → return xs
         Just x → go (x:xs)
 
@@ -396,21 +396,22 @@ data ChunkingPolicy
 -- | A 'Source' that reads chunks off a bounded STM queue according some
 -- 'ChunkingPolicy'.
 --
-chunkedSourceTBMQueue
-  ∷ ChunkingPolicy
-  → TBMQueue α
+chunkedSourceFromQueue
+  ∷ Queue STM q
+  ⇒ ChunkingPolicy
+  → q α
   → Source IO [α]
-chunkedSourceTBMQueue cp@ChunkingPolicy{..} q = do
+chunkedSourceFromQueue cp@ChunkingPolicy{..} q = do
   shouldTerminate ←
     liftIO ∘ atomically $
-      (&&) <$> isClosedTBMQueue q <*> isEmptyTBMQueue q
+      (&&) <$> isClosedQueue q <*> isEmptyQueue q
 
   unless shouldTerminate $ do
     items ← lift $ takeTBMQueueWithTimeout _cpMaxChunkSize _cpMinChunkingInterval q
     unless (null items) $ do
       yield items
 
-    chunkedSourceTBMQueue cp q
+    chunkedSourceFromQueue cp q
 
 -- | A conduit for concurently sending multiple records to Kinesis using the
 -- @PutRecord@ endpoint.
@@ -510,8 +511,10 @@ sendMessagesSink kit@ProducerKit{..} = do
 -- enqueued, an error of type 'WriteProducerException' will be returned.
 --
 writeProducer
-  ∷ MonadIO m
-  ⇒ KinesisProducer
+  ∷ ( MonadIO m
+    , Queue STM q
+    )
+  ⇒ KinesisProducer q
   → Message
   → m (Either WriteProducerException ())
 writeProducer producer !msg =
@@ -521,7 +524,7 @@ writeProducer producer !msg =
 
     gen ← liftIO R.newStdGen
     result ← liftIO ∘ atomically $ do
-      tryWriteTBMQueue (producer ^. kpMessageQueue) MessageQueueItem
+      tryPushQueue (producer ^. kpMessageQueue) MessageQueueItem
         { _mqiMessage = msg
         , _mqiPartitionKey = generatePartitionKey gen
         , _mqiRemainingAttempts = producer ^. kpRetryPolicy . rpRetryCount . to succ
@@ -535,17 +538,18 @@ writeProducer producer !msg =
 -- continuation with a return in 'Codensity'.
 --
 managedKinesisProducer
-  ∷ ∀ m
+  ∷ ∀ m q
   . ( MonadIO m
     , MonadBaseControl IO m
+    , Queue STM q
     )
   ⇒ ProducerKit
-  → Codensity m KinesisProducer
+  → Codensity m (KinesisProducer q)
 managedKinesisProducer kit = do
   when (kit ^. pkMaxConcurrency < 1) ∘ lift $
     throwIO InvalidConcurrentConsumerCount
 
-  messageQueue ← liftIO ∘ newTBMQueueIO $ kit ^. pkMessageQueueBounds
+  messageQueue ← liftIO ∘ atomically ∘ newQueue $ kit ^. pkMessageQueueBounds
 
   let
     producer = KinesisProducer
@@ -561,7 +565,7 @@ managedKinesisProducer kit = do
     -- TODO: figure out better error handling here (such as a limit to respawns)
     workerLoop ∷ IO () = do
       result ← tryAny $
-        chunkedSourceTBMQueue chunkingPolicy messageQueue
+        chunkedSourceFromQueue chunkingPolicy messageQueue
           $$ sendMessagesSink kit
       case result of
         Left exn → do
@@ -570,7 +574,7 @@ managedKinesisProducer kit = do
         Right () → return ()
 
     cleanupWorker _ = do
-      atomically $ closeTBMQueue messageQueue
+      atomically $ closeQueue messageQueue
 
   workerHandle ← Codensity $ bracket (async (liftIO workerLoop)) (liftIO ∘ cleanupWorker)
 
@@ -579,7 +583,7 @@ managedKinesisProducer kit = do
       result ← waitEitherCatch innerHandle workerHandle
       case result of
         Left innerResult → do
-          liftIO $ atomically $ closeTBMQueue messageQueue
+          liftIO ∘ atomically $ closeQueue messageQueue
           case _pkCleanupTimeout kit of
             Just timeout →
               withAsync (threadDelay $ 1000 * timeout) $ \timeoutHandle → do
@@ -590,7 +594,7 @@ managedKinesisProducer kit = do
                   Right (workerResult ∷ Either SomeException ()) →
                     throwIO ∘ ProducerWorkerDied $ workerResult ^? _Left
             Nothing → do
-              liftIO $ atomically $ closeTBMQueue messageQueue
+              liftIO $ atomically $ closeQueue messageQueue
               wait workerHandle ∷ m ()
 
           either throwIO return innerResult
@@ -604,9 +608,10 @@ managedKinesisProducer kit = do
 withKinesisProducer
   ∷ ( MonadIO m
     , MonadBaseControl IO m
+    , Queue STM q
     )
   ⇒ ProducerKit
-  → (KinesisProducer → m α)
+  → (KinesisProducer q → m α)
   → m α
 withKinesisProducer =
   runCodensity ∘ managedKinesisProducer
