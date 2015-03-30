@@ -70,7 +70,6 @@ module Aws.Kinesis.Client.Producer
 , WriteProducerException(..)
 , ProducerCleanupTimedOut(..)
 , ProducerWorkerDied(..)
-, InvalidProducerKit(..)
 
 , pattern MaxMessageSize
 
@@ -326,13 +325,6 @@ data ProducerWorkerDied
   deriving (Typeable, Show)
 
 instance Exception ProducerWorkerDied
-
-data InvalidProducerKit
-  = InvalidConcurrentConsumerCount
-  -- ^ Thrown when 'pkMaxConcurrency' is set with an invalid value.
-  deriving (Typeable, Show, Eq)
-
-instance Exception InvalidProducerKit
 
 -- | Generates a valid 'Kin.PartitionKey'.
 --
