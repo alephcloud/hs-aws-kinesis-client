@@ -512,11 +512,13 @@ managedKinesisProducer kit = do
       , _cpMinChunkingInterval = 5000000
       }
 
+    processQueue =
+      chunkedSourceFromQueue chunkingPolicy messageQueue
+        $$ sendMessagesSink kit
+
     -- TODO: figure out better error handling here (such as a limit to respawns)
     workerLoop ∷ IO () = do
-      result ← tryAny $
-        chunkedSourceFromQueue chunkingPolicy messageQueue
-          $$ sendMessagesSink kit
+      result ← tryAny processQueue
       case result of
         Left exn → do
           hPutStrLn stderr $ "Respawning Kinesis producer worker loop after exception: " ++ show exn
@@ -525,30 +527,28 @@ managedKinesisProducer kit = do
 
     cleanupWorker _ = do
       closeQueue messageQueue
+      withAsync processQueue $ \cleanupHandle → do
+        case _pkCleanupTimeout kit of
+          Just timeout →
+            withAsync (threadDelay ∘ fromIntegral $ 1000 * timeout) $ \timeoutHandle → do
+              result ← waitEitherCatchCancel timeoutHandle cleanupHandle
+              case result of
+                Left (_timeoutResult ∷ Either SomeException ()) →
+                  throwIO ProducerCleanupTimedOut
+                Right (workerResult ∷ Either SomeException ()) →
+                  throwIO ∘ ProducerWorkerDied $ workerResult ^? _Left
+          Nothing →
+            wait cleanupHandle
+
 
   workerHandle ← Codensity $ bracket (async (liftIO workerLoop)) (liftIO ∘ cleanupWorker)
 
   Codensity $ \inner → do
     withAsync (inner producer) $ \innerHandle → do
-      result ← waitEitherCatch innerHandle workerHandle
+      result ← waitEitherCatchCancel innerHandle workerHandle
       case result of
-        Left innerResult → do
-          liftIO $ closeQueue messageQueue
-          case _pkCleanupTimeout kit of
-            Just timeout →
-              withAsync (threadDelay ∘ fromIntegral $ 1000 * timeout) $ \timeoutHandle → do
-                result' ← waitEitherCatchCancel timeoutHandle workerHandle
-                case result' of
-                  Left (_timeoutResult ∷ Either SomeException ()) →
-                    throwIO ProducerCleanupTimedOut
-                  Right (workerResult ∷ Either SomeException ()) →
-                    throwIO ∘ ProducerWorkerDied $ workerResult ^? _Left
-            Nothing → do
-              liftIO $ closeQueue messageQueue
-              wait workerHandle ∷ m ()
-
+        Left innerResult →
           either throwIO return innerResult
-
         Right (workerResult ∷ Either SomeException ()) →
           throwIO ∘ ProducerWorkerDied $ workerResult ^? _Left
 
