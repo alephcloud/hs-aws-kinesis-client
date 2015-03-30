@@ -77,13 +77,10 @@ module Aws.Kinesis.Client.Producer
 , BatchPolicy
 , defaultBatchPolicy
 , bpBatchSize
-, bpEndpoint
 
 , RetryPolicy
 , defaultRetryPolicy
 , rpRetryCount
-
-, RecordEndpoint(..)
 ) where
 
 import qualified Aws.Kinesis as Kin
@@ -102,7 +99,6 @@ import Control.Monad.Reader
 import Control.Monad.Trans.Control
 import Control.Monad.Trans.Except
 import Data.Conduit
-import qualified Data.Conduit.List as CL
 import Data.Maybe
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
@@ -113,17 +109,6 @@ import Prelude.Unicode
 import qualified System.Random as R
 import System.IO
 
--- | There are two endpoints which may be used to send records to Kinesis.
---
-data RecordEndpoint
-  = PutRecordEndpoint
-  -- ^ Use the @PutRecord@ endpoint, which sends records one at a time.
-
-  | PutRecordsEndpoint
-  -- ^ Use the @PutRecords@ endpoint, which sends records in batches.
-
-  deriving (Eq, Show)
-
 -- | The maximum size in bytes of a message.
 --
 pattern MaxMessageSize = 51000
@@ -133,7 +118,6 @@ pattern MaxMessageSize = 51000
 data BatchPolicy
   = BatchPolicy
   { _bpBatchSize ∷ {-# UNPACK #-} !Natural
-  , _bpEndpoint ∷ !RecordEndpoint
   } deriving (Eq, Show)
 
 -- | The number of records to send in a single request. This is only used
@@ -142,18 +126,12 @@ data BatchPolicy
 bpBatchSize ∷ Lens' BatchPolicy Natural
 bpBatchSize = lens _bpBatchSize $ \bp bs → bp { _bpBatchSize = bs }
 
--- | The endpoint to use when sending records to Kinesis.
---
-bpEndpoint ∷ Lens' BatchPolicy RecordEndpoint
-bpEndpoint = lens _bpEndpoint $ \bp ep → bp { _bpEndpoint = ep }
-
 -- | The default batching policy sends @200@ records per 'PutRecordsEndpoint'
 -- request.
 --
 defaultBatchPolicy ∷ BatchPolicy
 defaultBatchPolicy = BatchPolicy
   { _bpBatchSize = 200
-  , _bpEndpoint = PutRecordsEndpoint
   }
 
 -- | The producer will attempt to re-send records which failed according to a
@@ -366,43 +344,6 @@ chunkedSourceFromQueue cp@ChunkingPolicy{..} q = do
 
     chunkedSourceFromQueue cp q
 
--- | A conduit for concurently sending multiple records to Kinesis using the
--- @PutRecord@ endpoint.
---
-concurrentPutRecordSink
-  ∷ ProducerKit
-  → Sink [MessageQueueItem] IO ()
-concurrentPutRecordSink kit@ProducerKit{..} = do
-  awaitForever $ \messages → do
-    lift ∘ flip (mapConcurrentlyN _pkMaxConcurrency 100) messages $ \m → do
-      CL.sourceList [m] $$ putRecordSink kit
-
-
--- | A conduit for sending a record to Kinesis using the @PutRecord@ endpoint;
--- this is a conduit in order to restore failed messages as leftovers.
---
-putRecordSink
-  ∷ ProducerKit
-  → Sink MessageQueueItem IO ()
-putRecordSink ProducerKit{..} = do
-  awaitForever $ \item → do
-    when (messageQueueItemIsEligible item) $ do
-      let partitionKey = item ^. mqiPartitionKey
-      result ← lift ∘ tryAny $ runKinesis _pkKinesisKit Kin.PutRecord
-        { Kin.putRecordData = item ^. mqiMessage ∘ to T.encodeUtf8
-        , Kin.putRecordExplicitHashKey = Nothing
-        , Kin.putRecordPartitionKey = partitionKey
-        , Kin.putRecordSequenceNumberForOrdering = Nothing
-        , Kin.putRecordStreamName = _pkStreamName
-        }
-      case result of
-        Left (SomeException e) → do
-          liftIO $ do
-            hPutStrLn stderr $ "Kinesis producer client error (will wait 5s): " ++ show e
-            threadDelay 5000000
-          leftover $ item & mqiRemainingAttempts -~ 1
-        Right _ → return ()
-
 splitEvery
   ∷ Natural
   → [α]
@@ -451,14 +392,6 @@ putRecordsSink ProducerKit{..} = do
         leftover $ items
           <&> mqiRemainingAttempts -~ 1
            & filter messageQueueItemIsEligible
-
-sendMessagesSink
-  ∷ ProducerKit
-  → Sink [MessageQueueItem] IO ()
-sendMessagesSink kit@ProducerKit{..} = do
-  case _pkBatchPolicy ^. bpEndpoint of
-    PutRecordsEndpoint → putRecordsSink kit
-    PutRecordEndpoint → concurrentPutRecordSink kit
 
 -- | Enqueues a message to Kinesis on the next shard. If a message cannot be
 -- enqueued, an error of type 'WriteProducerException' will be returned.
@@ -514,7 +447,7 @@ managedKinesisProducer kit = do
 
     processQueue =
       chunkedSourceFromQueue chunkingPolicy messageQueue
-        $$ sendMessagesSink kit
+        $$ putRecordsSink kit
 
     -- TODO: figure out better error handling here (such as a limit to respawns)
     workerLoop ∷ IO () = do
