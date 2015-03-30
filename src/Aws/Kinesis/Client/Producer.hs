@@ -499,9 +499,6 @@ managedKinesisProducer
   ⇒ ProducerKit
   → Codensity m (KinesisProducer q)
 managedKinesisProducer kit = do
-  when (kit ^. pkMaxConcurrency < 1) ∘ lift $
-    throwIO InvalidConcurrentConsumerCount
-
   messageQueue ← liftIO ∘ newQueue ∘ fromIntegral $ kit ^. pkMessageQueueBounds
 
   let
