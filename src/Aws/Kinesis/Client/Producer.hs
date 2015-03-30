@@ -46,6 +46,8 @@ module Aws.Kinesis.Client.Producer
   KinesisProducer
 , withKinesisProducer
 , managedKinesisProducer
+, managedKinesisProducer'
+, withKinesisProducer'
 
   -- * Commands
 , writeProducer
@@ -92,7 +94,6 @@ import Aws.Kinesis.Client.Queue
 import Control.Applicative
 import Control.Concurrent.Async.Lifted
 import Control.Concurrent.Lifted hiding (yield)
-import Control.Concurrent.STM
 import Control.Exception.Enclosed
 import Control.Exception.Lifted
 import Control.Lens
@@ -101,7 +102,6 @@ import Control.Monad.Codensity
 import Control.Monad.Reader
 import Control.Monad.Trans.Control
 import Control.Monad.Trans.Except
-import Control.Monad.Unicode
 import Data.Conduit
 import qualified Data.Conduit.List as CL
 import Data.Maybe
@@ -288,11 +288,11 @@ pkCleanupTimeout = lens _pkCleanupTimeout $ \pk n → pk { _pkCleanupTimeout = n
 --
 data KinesisProducer q
   = KinesisProducer
-  { _kpMessageQueue ∷ !(q MessageQueueItem)
+  { _kpMessageQueue ∷ !q
   , _kpRetryPolicy ∷ !RetryPolicy
   }
 
-kpMessageQueue ∷ Getter (KinesisProducer q) (q MessageQueueItem)
+kpMessageQueue ∷ Getter (KinesisProducer q) q
 kpMessageQueue = to _kpMessageQueue
 
 kpRetryPolicy ∷ Getter (KinesisProducer q) RetryPolicy
@@ -344,43 +344,6 @@ generatePartitionKey gen =
   Kin.partitionKey (T.pack name)
     & either (error ∘ T.unpack) id
 
--- | This will take up to @n@ items from a 'TBMQueue', with a timeout; the
--- semantics is that we will return as many items up to @n@ as we can get
--- within the allotted time.
---
-takeTBMQueueWithTimeout
-  ∷ Queue STM q
-  ⇒ Int -- ^ number of items to get
-  → Int -- ^ timeout in microseconds
-  → q α
-  → IO [α]
-takeTBMQueueWithTimeout n timeoutDelay q = do
-  timedOutVar ← registerDelay timeoutDelay
-
-  let
-    readItems xs =
-      -- if the queue is closed, then return what we have already got;
-      -- otherwise, block until we can read an item from it.
-      popQueue q ≫= \case
-        Nothing → return xs
-        Just x → go (x:xs)
-
-    timeout =
-      -- block until the timeout fires
-      readTVar timedOutVar ≫= check
-
-    go xs
-      | length xs ≥ n =
-          -- if we have got enough items, return immediately
-          return xs
-
-      | otherwise =
-          -- either we continue reading from the queue, or we have run out of
-          -- time
-          readItems xs <|> xs <$ timeout
-
-  atomically $ go []
-
 -- | A policy for chunking the contents of the message queue.
 --
 data ChunkingPolicy
@@ -397,17 +360,14 @@ data ChunkingPolicy
 -- 'ChunkingPolicy'.
 --
 chunkedSourceFromQueue
-  ∷ Queue STM q
+  ∷ BoundedCloseableQueue q α
   ⇒ ChunkingPolicy
-  → q α
+  → q
   → Source IO [α]
 chunkedSourceFromQueue cp@ChunkingPolicy{..} q = do
-  shouldTerminate ←
-    liftIO ∘ atomically $
-      (&&) <$> isClosedQueue q <*> isEmptyQueue q
-
+  shouldTerminate ← liftIO $ isClosedAndEmptyQueue q
   unless shouldTerminate $ do
-    items ← lift $ takeTBMQueueWithTimeout _cpMaxChunkSize _cpMinChunkingInterval q
+    items ← lift $ takeQueueTimeout q _cpMaxChunkSize _cpMinChunkingInterval
     unless (null items) $ do
       yield items
 
@@ -512,7 +472,7 @@ sendMessagesSink kit@ProducerKit{..} = do
 --
 writeProducer
   ∷ ( MonadIO m
-    , Queue STM q
+    , BoundedCloseableQueue q MessageQueueItem
     )
   ⇒ KinesisProducer q
   → Message
@@ -523,8 +483,8 @@ writeProducer producer !msg =
       throwE MessageTooLarge
 
     gen ← liftIO R.newStdGen
-    result ← liftIO ∘ atomically $ do
-      tryPushQueue (producer ^. kpMessageQueue) MessageQueueItem
+    result ← liftIO $
+      tryWriteQueue (producer ^. kpMessageQueue) MessageQueueItem
         { _mqiMessage = msg
         , _mqiPartitionKey = generatePartitionKey gen
         , _mqiRemainingAttempts = producer ^. kpRetryPolicy . rpRetryCount . to succ
@@ -541,7 +501,7 @@ managedKinesisProducer
   ∷ ∀ m q
   . ( MonadIO m
     , MonadBaseControl IO m
-    , Queue STM q
+    , BoundedCloseableQueue q MessageQueueItem
     )
   ⇒ ProducerKit
   → Codensity m (KinesisProducer q)
@@ -549,7 +509,7 @@ managedKinesisProducer kit = do
   when (kit ^. pkMaxConcurrency < 1) ∘ lift $
     throwIO InvalidConcurrentConsumerCount
 
-  messageQueue ← liftIO ∘ atomically ∘ newQueue $ kit ^. pkMessageQueueBounds
+  messageQueue ← liftIO ∘ newQueue ∘ fromIntegral $ kit ^. pkMessageQueueBounds
 
   let
     producer = KinesisProducer
@@ -574,7 +534,7 @@ managedKinesisProducer kit = do
         Right () → return ()
 
     cleanupWorker _ = do
-      atomically $ closeQueue messageQueue
+      closeQueue messageQueue
 
   workerHandle ← Codensity $ bracket (async (liftIO workerLoop)) (liftIO ∘ cleanupWorker)
 
@@ -583,7 +543,7 @@ managedKinesisProducer kit = do
       result ← waitEitherCatch innerHandle workerHandle
       case result of
         Left innerResult → do
-          liftIO ∘ atomically $ closeQueue messageQueue
+          liftIO $ closeQueue messageQueue
           case _pkCleanupTimeout kit of
             Just timeout →
               withAsync (threadDelay $ 1000 * timeout) $ \timeoutHandle → do
@@ -594,7 +554,7 @@ managedKinesisProducer kit = do
                   Right (workerResult ∷ Either SomeException ()) →
                     throwIO ∘ ProducerWorkerDied $ workerResult ^? _Left
             Nothing → do
-              liftIO $ atomically $ closeQueue messageQueue
+              liftIO $ closeQueue messageQueue
               wait workerHandle ∷ m ()
 
           either throwIO return innerResult
@@ -608,13 +568,42 @@ managedKinesisProducer kit = do
 withKinesisProducer
   ∷ ( MonadIO m
     , MonadBaseControl IO m
-    , Queue STM q
+    , BoundedCloseableQueue q MessageQueueItem
     )
   ⇒ ProducerKit
   → (KinesisProducer q → m α)
   → m α
 withKinesisProducer =
   runCodensity ∘ managedKinesisProducer
+
+-- | Like 'managedKinesisProducer', but with an explicit generic queue
+-- implementation. This is so that a queue implementation may be specified
+-- without us exporting type of the queue's values, which is internal.
+managedKinesisProducer'
+  ∷ ( MonadIO m
+    , MonadBaseControl IO m
+    , BoundedCloseableQueue (q MessageQueueItem) MessageQueueItem
+    )
+  ⇒ ProducerKit
+  → proxy q
+  → Codensity m (KinesisProducer (q MessageQueueItem))
+managedKinesisProducer' kit _ =
+  managedKinesisProducer kit
+
+-- | Like 'withKinesisProducer', but with an explicit generic queue
+-- implementation. This is so that a queue implementation may be specified
+-- without us exporting type of the queue's values, which is internal.
+withKinesisProducer'
+  ∷ ( MonadIO m
+    , MonadBaseControl IO m
+    , BoundedCloseableQueue (q MessageQueueItem) MessageQueueItem
+    )
+  ⇒ ProducerKit
+  → proxy q
+  → (KinesisProducer (q MessageQueueItem) → m α)
+  → m α
+withKinesisProducer' kit _ =
+  withKinesisProducer kit
 
 -- | map at most n actions concurrently
 --

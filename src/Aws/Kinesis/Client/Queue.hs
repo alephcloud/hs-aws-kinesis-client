@@ -18,6 +18,7 @@
 
 {-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
@@ -36,72 +37,131 @@
 -- Stability: experimental
 --
 module Aws.Kinesis.Client.Queue
-( Queue(..)
--- , BoundedQueue(..)
--- , CloseableQueue(..)
+( BoundedCloseableQueue(..)
 ) where
 
+import Control.Applicative
 import Control.Concurrent.STM
 import Control.Concurrent.STM.TBMQueue
+import Control.Monad.Unicode
+import Numeric.Natural
 import Prelude.Unicode
 
--- | An abstract signature for queues.
+-- | A signature for bounded, closeable queues.
 --
-class Queue m q | q → m where
+class BoundedCloseableQueue q α | q → α where
+  -- Create a queue with size @n@.
   newQueue
-    ∷ Int
-    → m (q α)
+    ∷ Natural -- ^ the size @n@ of the queue
+    → IO q
 
-  -- | Read a value from the queue (blocking).
-  popQueue
-    ∷ q α
-    → m (Maybe α)
-
-  -- | Write a value to the queue.
-  pushQueue
-    ∷ q α
-    → α
-    → m ()
-
-  tryPushQueue
-    ∷ q α
-    → α
-    → m (Maybe Bool)
-
-  isFullQueue
-    ∷ q α
-    → m Bool
-
+  -- Close the queue.
   closeQueue
-    ∷ q α
-    → m ()
+    ∷ q
+    → IO ()
 
-  isClosedQueue
-    ∷ q α
-    → m Bool
+  -- | Returns 'False' if and only if the queue is closed. If the queue is full
+  -- this function shall block.
+  writeQueue
+    ∷ q
+    → α
+    → IO Bool
 
+  -- | Non-blocking version of 'writeQueue'. Returns 'Nothing' if the queue was
+  -- full. Otherwise it returns 'Just True' if the value was successfully
+  -- written and 'Just False' if the queue was closed.
+  tryWriteQueue
+    ∷ q
+    → α
+    → IO (Maybe Bool)
+
+  -- | Returns 'Nothing' if and only if the queue is closed. If this queue is
+  -- empty this function blocks.
+  readQueue
+    ∷ q
+    → IO (Maybe α)
+
+  -- | Take up to @n@ items from the queue with a timeout of @t@.
+  takeQueueTimeout
+    ∷ q
+    → Int -- ^ the number of items @n@ to take
+    → Int -- ^ the timeout @t@ in microseconds
+    → IO [α]
+
+  -- | Whether the queue is empty.
   isEmptyQueue
-    ∷ q α
-    → m Bool
+    ∷ q
+    → IO Bool
 
-instance Queue STM TBMQueue where
-  newQueue = newTBMQueue
-  popQueue = readTBMQueue
-  pushQueue = writeTBMQueue
-  tryPushQueue = tryWriteTBMQueue
-  closeQueue = closeTBMQueue
-  isFullQueue = isFullTBMQueue
-  isClosedQueue = isClosedTBMQueue
-  isEmptyQueue = isEmptyTBMQueue
+  -- | Whether the queue is closed.
+  isClosedQueue
+    ∷ q
+    → IO Bool
 
-newtype IOQueue q α = IOQueue (q α)
+  -- | Whether the queue is empty and closed. The trivial default
+  -- implementation may be overridden with one which provides transactional
+  -- guarantees.
+  isClosedAndEmptyQueue
+    ∷ q
+    → IO Bool
+  isClosedAndEmptyQueue q =
+    (&&) <$> isEmptyQueue q <*> isClosedQueue q
 
-instance Queue STM q ⇒ Queue IO (IOQueue q) where
-  newQueue = fmap IOQueue ∘ atomically ∘ newQueue
-  popQueue (IOQueue q) = atomically $ popQueue q
-  pushQueue (IOQueue q) = atomically ∘ pushQueue q
-  tryPushQueue (IOQueue q) = atomically ∘ tryPushQueue q
-  closeQueue (IOQueue q) = atomically $ closeQueue q
-  isFullQueue (IOQueue q) = atomically $ isFullQueue q
-  isClosedQueue (IOQueue q) = atomically $ isClosedQueue q
-  isEmptyQueue (IOQueue q) = atomically $ isEmptyQueue q
+instance BoundedCloseableQueue (TBMQueue a) a where
+  newQueue =
+    newTBMQueueIO ∘ fromIntegral
+
+  closeQueue =
+    atomically ∘ closeTBMQueue
+
+  writeQueue q a =
+    atomically $ isClosedTBMQueue q ≫= \case
+      True → return False
+      False → True <$ writeTBMQueue q a
+
+  tryWriteQueue q a =
+    atomically $ tryWriteTBMQueue q a ≫= \case
+      Nothing → return $ Just False
+      Just False → return Nothing
+      Just True → return $ Just True
+
+  readQueue =
+    atomically ∘ readTBMQueue
+
+  -- TODO: update implementation of takeQueueTimeout w/ Lars's suggestions
+  takeQueueTimeout q n timeoutDelay = do
+    timedOutVar ← registerDelay timeoutDelay
+    let
+      readItems xs =
+        -- if the queue is closed, then return what we have already got;
+        -- otherwise, block until we can read an item from it.
+        readTBMQueue q ≫= \case
+          Nothing → return xs
+          Just x → go (x:xs)
+
+      timeout =
+        -- block until the timeout fires
+        readTVar timedOutVar ≫= check
+
+      go xs
+        | length xs ≥ n =
+            -- if we have got enough items, return immediately
+            return xs
+
+        | otherwise =
+            -- either we continue reading from the queue, or we have run out of
+            -- time
+            readItems xs <|> xs <$ timeout
+
+    atomically $ go []
+
+  isClosedQueue =
+    atomically ∘ isClosedTBMQueue
+
+  isEmptyQueue =
+    atomically ∘ isEmptyTBMQueue
+
+  isClosedAndEmptyQueue q =
+    atomically $
+      (&&) <$> isClosedTBMQueue q <*> isEmptyTBMQueue q
+
