@@ -109,6 +109,7 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
 import Data.Traversable
 import Data.Typeable
+import Numeric.Natural
 import Prelude.Unicode
 import qualified System.Random as R
 import System.IO
@@ -132,14 +133,14 @@ pattern MaxMessageSize = 51000
 --
 data BatchPolicy
   = BatchPolicy
-  { _bpBatchSize ∷ {-# UNPACK #-} !Int
+  { _bpBatchSize ∷ {-# UNPACK #-} !Natural
   , _bpEndpoint ∷ !RecordEndpoint
   } deriving (Eq, Show)
 
 -- | The number of records to send in a single request. This is only used
 -- when the endpoint is set to 'PutRecordsEndpoint'.
 --
-bpBatchSize ∷ Lens' BatchPolicy Int
+bpBatchSize ∷ Lens' BatchPolicy Natural
 bpBatchSize = lens _bpBatchSize $ \bp bs → bp { _bpBatchSize = bs }
 
 -- | The endpoint to use when sending records to Kinesis.
@@ -162,12 +163,12 @@ defaultBatchPolicy = BatchPolicy
 -- of enqueuing a message.
 data RetryPolicy
   = RetryPolicy
-  { _rpRetryCount ∷ {-# UNPACK #-} !Int
+  { _rpRetryCount ∷ {-# UNPACK #-} !Natural
   } deriving (Eq, Show)
 
 -- | The number of times to retry sending a message after it has first failed.
 --
-rpRetryCount ∷ Lens' RetryPolicy Int
+rpRetryCount ∷ Lens' RetryPolicy Natural
 rpRetryCount = lens _rpRetryCount $ \rp n → rp { _rpRetryCount = n }
 
 -- | The default retry policy will attempt @5@ retries for a message.
@@ -187,7 +188,7 @@ data MessageQueueItem
   , _mqiPartitionKey ∷ !Kin.PartitionKey
   -- ^ The partition key the message is destined for
 
-  , _mqiRemainingAttempts ∷ {-# UNPACK #-} !Int
+  , _mqiRemainingAttempts ∷ {-# UNPACK #-} !Natural
   -- ^ The number of times remaining to try and publish this message
   } deriving (Eq, Show)
 
@@ -197,7 +198,7 @@ mqiMessage = lens _mqiMessage $ \i m → i { _mqiMessage = m }
 mqiPartitionKey ∷ Lens' MessageQueueItem Kin.PartitionKey
 mqiPartitionKey = lens _mqiPartitionKey $ \i s → i { _mqiPartitionKey = s }
 
-mqiRemainingAttempts ∷ Lens' MessageQueueItem Int
+mqiRemainingAttempts ∷ Lens' MessageQueueItem Natural
 mqiRemainingAttempts = lens _mqiRemainingAttempts $ \i n → i { _mqiRemainingAttempts = n }
 
 messageQueueItemIsEligible
@@ -222,13 +223,13 @@ data ProducerKit
   , _pkRetryPolicy ∷ !RetryPolicy
   -- ^ The retry policy for the producer.
 
-  , _pkMessageQueueBounds ∷ {-# UNPACK #-} !Int
+  , _pkMessageQueueBounds ∷ {-# UNPACK #-} !Natural
   -- ^ The maximum number of records that may be enqueued at one time.
 
-  , _pkMaxConcurrency ∷ {-# UNPACK #-} !Int
+  , _pkMaxConcurrency ∷ {-# UNPACK #-} !Natural
   -- ^ The number of requests to run concurrently (minimum: 1).
 
-  , _pkCleanupTimeout ∷ !(Maybe Int)
+  , _pkCleanupTimeout ∷ !(Maybe Natural)
   -- ^ The timeout in milliseconds, after which the producer's cleanup routine
   -- will terminate, finished or not, throwing 'ProducerCleanupTimedOut'.
   }
@@ -271,17 +272,17 @@ pkRetryPolicy = lens _pkRetryPolicy $ \pk rp → pk { _pkRetryPolicy = rp }
 
 -- | A lens for '_pkMessageQueueBounds'.
 --
-pkMessageQueueBounds ∷ Lens' ProducerKit Int
+pkMessageQueueBounds ∷ Lens' ProducerKit Natural
 pkMessageQueueBounds = lens _pkMessageQueueBounds $ \pk qb → pk { _pkMessageQueueBounds = qb }
 
 -- | A lens for '_pkMaxConcurrency'.
 --
-pkMaxConcurrency ∷ Lens' ProducerKit Int
+pkMaxConcurrency ∷ Lens' ProducerKit Natural
 pkMaxConcurrency = lens _pkMaxConcurrency $ \pk n → pk { _pkMaxConcurrency = n }
 
 -- | A lens for '_pkCleanupTimeout'.
 --
-pkCleanupTimeout ∷ Lens' ProducerKit (Maybe Int)
+pkCleanupTimeout ∷ Lens' ProducerKit (Maybe Natural)
 pkCleanupTimeout = lens _pkCleanupTimeout $ \pk n → pk { _pkCleanupTimeout = n }
 
 -- | The (abstract) Kinesis producer client.
@@ -348,10 +349,10 @@ generatePartitionKey gen =
 --
 data ChunkingPolicy
   = ChunkingPolicy
-  { _cpMaxChunkSize ∷ !Int
+  { _cpMaxChunkSize ∷ !Natural
   -- ^ The largest chunk size that is permitted.
 
-  , _cpMinChunkingInterval ∷ !Int
+  , _cpMinChunkingInterval ∷ !Natural
   -- ^ The time in microseconds after which a chunk should be committed, even
   -- if the maximum chunk size has not yet been reached.
   }
@@ -411,13 +412,13 @@ putRecordSink ProducerKit{..} = do
         Right _ → return ()
 
 splitEvery
-  ∷ Int
+  ∷ Natural
   → [α]
   → [[α]]
 splitEvery _ [] = []
 splitEvery n list = first : splitEvery n rest
   where
-    (first,rest) = splitAt n list
+    (first,rest) = splitAt (fromIntegral n) list
 
 -- | A conduit for sending records to Kinesis using the @PutRecords@ endpoint.
 -- This is a conduit in order to restore failed messages as leftovers.
@@ -546,7 +547,7 @@ managedKinesisProducer kit = do
           liftIO $ closeQueue messageQueue
           case _pkCleanupTimeout kit of
             Just timeout →
-              withAsync (threadDelay $ 1000 * timeout) $ \timeoutHandle → do
+              withAsync (threadDelay ∘ fromIntegral $ 1000 * timeout) $ \timeoutHandle → do
                 result' ← waitEitherCatchCancel timeoutHandle workerHandle
                 case result' of
                   Left (_timeoutResult ∷ Either SomeException ()) →
@@ -609,18 +610,18 @@ withKinesisProducer' kit _ =
 --
 mapConcurrentlyN
   ∷ Traversable t
-  ⇒ Int -- ^ number of concurrent actions
-  → Int -- ^ startup delay between actions in milliseconds
+  ⇒ Natural -- ^ number of concurrent actions
+  → Natural -- ^ startup delay between actions in milliseconds
   → (a → IO b)
   → t a
   → IO (t b)
 mapConcurrentlyN n delay f t = do
-  sem ← liftIO $ newQSem n
+  sem ← liftIO ∘ newQSem $ fromIntegral n
   mapConcurrently (run sem) t_
     where
       (_, t_) = mapAccumL (\i v → (succ i, (i,v))) 0 t
       run sem (i,a) =
         liftBaseOp_ (bracket_ (waitQSem sem) (signalQSem sem)) $ do
-          liftIO ∘ threadDelay $ 1000 * delay * i
+          liftIO ∘ threadDelay ∘ fromIntegral $ 1000 * delay * i
           f a
 

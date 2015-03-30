@@ -84,8 +84,8 @@ class BoundedCloseableQueue q α | q → α where
   -- | Take up to @n@ items from the queue with a timeout of @t@.
   takeQueueTimeout
     ∷ q
-    → Int -- ^ the number of items @n@ to take
-    → Int -- ^ the timeout @t@ in microseconds
+    → Natural -- ^ the number of items @n@ to take
+    → Natural -- ^ the timeout @t@ in microseconds
     → IO [α]
 
   -- | Whether the queue is empty.
@@ -130,7 +130,7 @@ instance BoundedCloseableQueue (TBMQueue a) a where
 
   -- TODO: update implementation of takeQueueTimeout w/ Lars's suggestions
   takeQueueTimeout q n timeoutDelay = do
-    timedOutVar ← registerDelay timeoutDelay
+    timedOutVar ← registerDelay $ fromIntegral timeoutDelay
     let
       readItems xs =
         -- if the queue is closed, then return what we have already got;
@@ -144,7 +144,7 @@ instance BoundedCloseableQueue (TBMQueue a) a where
         readTVar timedOutVar ≫= check
 
       go xs
-        | length xs ≥ n =
+        | length xs ≥ fromIntegral n =
             -- if we have got enough items, return immediately
             return xs
 
