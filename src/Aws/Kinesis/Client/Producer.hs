@@ -466,9 +466,9 @@ managedKinesisProducer kit = do
             withAsync (threadDelay ∘ fromIntegral $ 1000 * timeout) $ \timeoutHandle → do
               result ← waitEitherCatchCancel timeoutHandle cleanupHandle
               case result of
-                Left (_timeoutResult ∷ Either SomeException ()) →
+                Left _timeoutResult →
                   throwIO ProducerCleanupTimedOut
-                Right (workerResult ∷ Either SomeException ()) →
+                Right workerResult →
                   throwIO ∘ ProducerWorkerDied $ workerResult ^? _Left
           Nothing →
             wait cleanupHandle
