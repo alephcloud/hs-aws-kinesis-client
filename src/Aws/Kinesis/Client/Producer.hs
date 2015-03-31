@@ -413,7 +413,7 @@ writeProducer producer !msg =
       tryWriteQueue (producer ^. kpMessageQueue) MessageQueueItem
         { _mqiMessage = msg
         , _mqiPartitionKey = generatePartitionKey gen
-        , _mqiRemainingAttempts = producer ^. kpRetryPolicy . rpRetryCount . to succ
+        , _mqiRemainingAttempts = producer ^. kpRetryPolicy ∘ rpRetryCount ∘ to succ
         }
     case result of
       Just written → unless written $ throwE ProducerQueueFull
