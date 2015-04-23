@@ -19,9 +19,15 @@ This release contains breaking changes.
 
 - [Consumer] Removed unused `ConsumerError` type.
 
+- [Producer] Parameterized the implementation by an arbitrary queue
+  implementation; by default, the producer's message queue is now implemented
+  using `TBMChan` to avoid a bug in `TBMQueue` which causes live-locking under
+  very heavy load.
+
 Other non-breaking changes:
 
-- [Producer] A better, more reliable implementation of consuming the input queue in chunks.
+- [Producer] A better, more reliable implementation of consuming the input
+  queue in chunks.
 
 - Removed dependencies on `either`, `errors`, `hoist-error`, `stm-conduit`;
   added dependency on `enclosed-exceptions`.
