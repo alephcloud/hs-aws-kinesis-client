@@ -46,8 +46,7 @@ module Aws.Kinesis.Client.Producer
   KinesisProducer
 , withKinesisProducer
 , managedKinesisProducer
-, managedKinesisProducer'
-, withKinesisProducer'
+, defaultQueueProxy
 
   -- * Commands
 , writeProducer
@@ -90,6 +89,7 @@ import Aws.Kinesis.Client.Queue
 import Control.Applicative
 import Control.Concurrent.Async.Lifted
 import Control.Concurrent.Lifted hiding (yield)
+import Control.Concurrent.STM.TBMChan
 import Control.Exception.Enclosed
 import Control.Exception.Lifted
 import Control.Lens
@@ -264,17 +264,12 @@ pkCleanupTimeout = lens _pkCleanupTimeout $ \pk n → pk { _pkCleanupTimeout = n
 
 -- | The (abstract) Kinesis producer client.
 --
-data KinesisProducer q
-  = KinesisProducer
+data KinesisProducer
+  = ∀ q. BoundedCloseableQueue q MessageQueueItem
+  ⇒ KinesisProducer
   { _kpMessageQueue ∷ !q
   , _kpRetryPolicy ∷ !RetryPolicy
   }
-
-kpMessageQueue ∷ Getter (KinesisProducer q) q
-kpMessageQueue = to _kpMessageQueue
-
-kpRetryPolicy ∷ Getter (KinesisProducer q) RetryPolicy
-kpRetryPolicy = to _kpRetryPolicy
 
 data WriteProducerException
   = ProducerQueueClosed
@@ -397,23 +392,21 @@ putRecordsSink ProducerKit{..} = do
 -- enqueued, an error of type 'WriteProducerException' will be returned.
 --
 writeProducer
-  ∷ ( MonadIO m
-    , BoundedCloseableQueue q MessageQueueItem
-    )
-  ⇒ KinesisProducer q
+  ∷ MonadIO m
+  ⇒ KinesisProducer
   → Message
   → m (Either WriteProducerException ())
-writeProducer producer !msg =
+writeProducer KinesisProducer{..} !msg =
   runExceptT $ do
     when (T.length msg > MaxMessageSize) $
       throwE MessageTooLarge
 
     gen ← liftIO R.newStdGen
     result ← liftIO $
-      tryWriteQueue (producer ^. kpMessageQueue) MessageQueueItem
+      tryWriteQueue _kpMessageQueue MessageQueueItem
         { _mqiMessage = msg
         , _mqiPartitionKey = generatePartitionKey gen
-        , _mqiRemainingAttempts = producer ^. kpRetryPolicy ∘ rpRetryCount ∘ to succ
+        , _mqiRemainingAttempts = _kpRetryPolicy ^. rpRetryCount ∘ to succ
         }
     case result of
       Just written → unless written $ throwE ProducerQueueFull
@@ -429,14 +422,15 @@ managedKinesisProducer
     , MonadBaseControl IO m
     , BoundedCloseableQueue q MessageQueueItem
     )
-  ⇒ ProducerKit
-  → Codensity m (KinesisProducer q)
-managedKinesisProducer kit = do
+  ⇒ Proxy q
+  → ProducerKit
+  → Codensity m KinesisProducer
+managedKinesisProducer _ kit = do
   messageQueue ← liftIO ∘ newQueue ∘ fromIntegral $ kit ^. pkMessageQueueBounds
 
   let
     producer = KinesisProducer
-      { _kpMessageQueue = messageQueue
+      { _kpMessageQueue = (messageQueue ∷ q)
       , _kpRetryPolicy = kit ^. pkRetryPolicy
       }
 
@@ -485,6 +479,9 @@ managedKinesisProducer kit = do
         Right (workerResult ∷ Either SomeException ()) →
           throwIO ∘ ProducerWorkerDied $ workerResult ^? _Left
 
+defaultQueueProxy ∷ Proxy (TBMChan α)
+defaultQueueProxy = Proxy
+
 -- | This constructs a 'KinesisProducer' and closes it when you have done with
 -- it.
 --
@@ -493,40 +490,12 @@ withKinesisProducer
     , MonadBaseControl IO m
     , BoundedCloseableQueue q MessageQueueItem
     )
-  ⇒ ProducerKit
-  → (KinesisProducer q → m α)
+  ⇒ Proxy q
+  → ProducerKit
+  → (KinesisProducer → m α)
   → m α
-withKinesisProducer =
-  runCodensity ∘ managedKinesisProducer
-
--- | Like 'managedKinesisProducer', but with an explicit generic queue
--- implementation. This is so that a queue implementation may be specified
--- without us exporting type of the queue's values, which is internal.
-managedKinesisProducer'
-  ∷ ( MonadIO m
-    , MonadBaseControl IO m
-    , BoundedCloseableQueue (q MessageQueueItem) MessageQueueItem
-    )
-  ⇒ ProducerKit
-  → proxy q
-  → Codensity m (KinesisProducer (q MessageQueueItem))
-managedKinesisProducer' kit _ =
-  managedKinesisProducer kit
-
--- | Like 'withKinesisProducer', but with an explicit generic queue
--- implementation. This is so that a queue implementation may be specified
--- without us exporting type of the queue's values, which is internal.
-withKinesisProducer'
-  ∷ ( MonadIO m
-    , MonadBaseControl IO m
-    , BoundedCloseableQueue (q MessageQueueItem) MessageQueueItem
-    )
-  ⇒ ProducerKit
-  → proxy q
-  → (KinesisProducer (q MessageQueueItem) → m α)
-  → m α
-withKinesisProducer' kit _ =
-  withKinesisProducer kit
+withKinesisProducer q =
+  runCodensity ∘ managedKinesisProducer q
 
 -- | map at most n actions concurrently
 --
