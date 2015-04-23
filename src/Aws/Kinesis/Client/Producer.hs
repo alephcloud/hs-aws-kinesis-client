@@ -64,6 +64,7 @@ import Aws.Kinesis.Client.Common
 import Aws.Kinesis.Client.Producer.Kit
 import Aws.Kinesis.Client.Producer.Internal
 import Aws.Kinesis.Client.Internal.Queue
+import Aws.Kinesis.Client.Internal.Queue.Chunk
 
 import Control.Applicative
 import Control.Concurrent.Async.Lifted
@@ -136,34 +137,6 @@ generatePartitionKey gen =
   Kin.partitionKey (T.pack name)
     & either (error ∘ T.unpack) id
 
--- | A policy for chunking the contents of the message queue.
---
-data ChunkingPolicy
-  = ChunkingPolicy
-  { _cpMaxChunkSize ∷ !Natural
-  -- ^ The largest chunk size that is permitted.
-
-  , _cpMinChunkingInterval ∷ !Natural
-  -- ^ The time in microseconds after which a chunk should be committed, even
-  -- if the maximum chunk size has not yet been reached.
-  }
-
--- | A 'Source' that reads chunks off a bounded STM queue according some
--- 'ChunkingPolicy'.
---
-chunkedSourceFromQueue
-  ∷ BoundedCloseableQueue q α
-  ⇒ ChunkingPolicy
-  → q
-  → Source IO [α]
-chunkedSourceFromQueue cp@ChunkingPolicy{..} q = do
-  shouldTerminate ← liftIO $ isClosedAndEmptyQueue q
-  unless shouldTerminate $ do
-    items ← lift $ takeQueueTimeout q _cpMaxChunkSize _cpMinChunkingInterval
-    unless (null items) $ do
-      yield items
-
-    chunkedSourceFromQueue cp q
 
 splitEvery
   ∷ Natural
