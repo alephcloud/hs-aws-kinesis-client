@@ -188,8 +188,8 @@ messageQueueItemIsEligible =
   (≥ 1) ∘ _mqiRemainingAttempts
 
 data QueueImplementation
-  = ∀ q. BoundedCloseableQueue q MessageQueueItem
-  ⇒ QueueImplementation (Proxy q)
+  = ∀ proxy q. BoundedCloseableQueue q MessageQueueItem
+  ⇒ QueueImplementation (proxy q)
 
 -- | The basic input required to construct a Kinesis producer.
 --
@@ -438,7 +438,7 @@ managedKinesisProducer
     )
   ⇒ ProducerKit
   → Codensity m KinesisProducer
-managedKinesisProducer kit@ProducerKit{_pkQueueImplementation = QueueImplementation (Proxy ∷ Proxy q)} = do
+managedKinesisProducer kit@ProducerKit{_pkQueueImplementation = QueueImplementation (_ ∷ proxy q)} = do
   messageQueue ← liftIO ∘ newQueue ∘ fromIntegral $ kit ^. pkMessageQueueBounds
 
   let
