@@ -19,10 +19,9 @@ This release contains breaking changes.
 
 - [Consumer] Removed unused `ConsumerError` type.
 
-- [Producer] Parameterized the implementation by an arbitrary queue
-  implementation; by default, the producer's message queue is now implemented
-  using `TBMChan` to avoid a bug in `TBMQueue` which causes live-locking under
-  very heavy load.
+- [Producer] Parameterized the implementation by an arbitrary queue structure;
+  by default, the producer's message queue is now implemented using `TBMChan`
+  to avoid a bug in `TQueue` which causes live-locking under very heavy load.
 
 Other non-breaking changes:
 
