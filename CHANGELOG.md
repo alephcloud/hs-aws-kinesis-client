@@ -19,6 +19,8 @@ This release contains breaking changes.
 
 - [Consumer] Removed unused `ConsumerError` type.
 
+- [Consumer] Changed batch size to use `Natural` type rather than `Int`.
+
 - [Producer] Parameterized the implementation by an arbitrary queue structure;
   by default, the producer's message queue is now implemented using `TBMChan`
   to avoid a bug in `TQueue` which causes live-locking under very heavy load.

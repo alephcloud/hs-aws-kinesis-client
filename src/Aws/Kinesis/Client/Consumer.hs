@@ -82,6 +82,7 @@ import qualified Data.HashMap.Strict as HM
 import Data.Traversable (for)
 import Data.Conduit
 import qualified Data.Conduit.List as CL
+import Numeric.Natural
 import Prelude.Unicode
 
 -- | The internal representation for shards used by the consumer.
@@ -122,7 +123,7 @@ data ConsumerKit
   , _ckStreamName ∷ !Kin.StreamName
   -- ^ The name of the stream to consume from.
 
-  , _ckBatchSize ∷ {-# UNPACK #-} !Int
+  , _ckBatchSize ∷ !Natural
   -- ^ The number of records to fetch at once from the stream.
 
   , _ckIteratorType ∷ !Kin.ShardIteratorType
@@ -161,7 +162,7 @@ ckStreamName = lens _ckStreamName $ \ck sn → ck { _ckStreamName = sn }
 
 -- | A lens for '_ckBatchSize'.
 --
-ckBatchSize ∷ Lens' ConsumerKit Int
+ckBatchSize ∷ Lens' ConsumerKit Natural
 ckBatchSize = lens _ckBatchSize $ \ck bs → ck { _ckBatchSize = bs }
 
 -- | A lens for '_ckIteratorType'.
@@ -246,7 +247,7 @@ withKinesisConsumer
   → m α
 withKinesisConsumer kit inner = do
   let batchSize = kit ^. ckBatchSize
-  messageQueue ← liftIO ∘ newTBQueueIO $ batchSize * 10
+  messageQueue ← liftIO ∘ newTBQueueIO $ fromIntegral batchSize * 10
 
   state ← liftIO $ updateStreamState kit CR.empty ≫= newTVarIO
 
@@ -339,7 +340,7 @@ replenishMessages ConsumerKit{..} messageQueue shardsVar = do
     return (shard, iterator)
 
   Kin.GetRecordsResponse{..} ← runKinesis _ckKinesisKit Kin.GetRecords
-    { getRecordsLimit = Just _ckBatchSize
+    { getRecordsLimit = Just $ fromIntegral _ckBatchSize
     , getRecordsShardIterator = iterator
     }
 
