@@ -46,7 +46,6 @@ module Aws.Kinesis.Client.Producer
   KinesisProducer
 , withKinesisProducer
 , managedKinesisProducer
-, defaultQueueProxy
 
   -- * Commands
 , writeProducer
@@ -55,6 +54,9 @@ module Aws.Kinesis.Client.Producer
   -- * Producer Environment
 , ProducerKit(..)
 , makeProducerKit
+  -- ** Queue Implementations
+, QueueImplementation(..)
+, defaultQueueImplementation
 
   -- ** Lenses
 , pkKinesisKit
@@ -64,6 +66,7 @@ module Aws.Kinesis.Client.Producer
 , pkMessageQueueBounds
 , pkMaxConcurrency
 , pkCleanupTimeout
+, pkQueueImplementation
 
 -- * Exceptions
 , WriteProducerException(..)
@@ -184,6 +187,10 @@ messageQueueItemIsEligible
 messageQueueItemIsEligible =
   (≥ 1) ∘ _mqiRemainingAttempts
 
+data QueueImplementation
+  = ∀ q. BoundedCloseableQueue q MessageQueueItem
+  ⇒ QueueImplementation (Proxy q)
+
 -- | The basic input required to construct a Kinesis producer.
 --
 data ProducerKit
@@ -209,6 +216,9 @@ data ProducerKit
   , _pkCleanupTimeout ∷ !(Maybe Natural)
   -- ^ The timeout in milliseconds, after which the producer's cleanup routine
   -- will terminate, finished or not, throwing 'ProducerCleanupTimedOut'.
+
+  , _pkQueueImplementation ∷ QueueImplementation
+  -- ^ The Kinesis Producer is parameterized over a concrete queue implementation.
   }
 
 -- | Create a 'ProducerKit' with default settings.
@@ -225,6 +235,7 @@ makeProducerKit kinesisKit streamName = ProducerKit
   , _pkMessageQueueBounds = 10000
   , _pkMaxConcurrency = 3
   , _pkCleanupTimeout = Nothing
+  , _pkQueueImplementation = defaultQueueImplementation
   }
 
 -- | A lens for '_pkKinesisKit'.
@@ -261,6 +272,11 @@ pkMaxConcurrency = lens _pkMaxConcurrency $ \pk n → pk { _pkMaxConcurrency = n
 --
 pkCleanupTimeout ∷ Lens' ProducerKit (Maybe Natural)
 pkCleanupTimeout = lens _pkCleanupTimeout $ \pk n → pk { _pkCleanupTimeout = n }
+
+-- | A lens for '_pkQueueImplementation'.
+--
+pkQueueImplementation ∷ Setter' ProducerKit QueueImplementation
+pkQueueImplementation = lens _pkQueueImplementation $ \pk q → pk { _pkQueueImplementation = q }
 
 -- | The (abstract) Kinesis producer client.
 --
@@ -417,15 +433,12 @@ writeProducer KinesisProducer{..} !msg =
 -- continuation with a return in 'Codensity'.
 --
 managedKinesisProducer
-  ∷ ∀ m q
-  . ( MonadIO m
+  ∷ ( MonadIO m
     , MonadBaseControl IO m
-    , BoundedCloseableQueue q MessageQueueItem
     )
-  ⇒ Proxy q
-  → ProducerKit
+  ⇒ ProducerKit
   → Codensity m KinesisProducer
-managedKinesisProducer _ kit = do
+managedKinesisProducer kit@ProducerKit{_pkQueueImplementation = QueueImplementation (Proxy ∷ Proxy q)} = do
   messageQueue ← liftIO ∘ newQueue ∘ fromIntegral $ kit ^. pkMessageQueueBounds
 
   let
@@ -479,8 +492,8 @@ managedKinesisProducer _ kit = do
         Right (workerResult ∷ Either SomeException ()) →
           throwIO ∘ ProducerWorkerDied $ workerResult ^? _Left
 
-defaultQueueProxy ∷ Proxy (TBMChan α)
-defaultQueueProxy = Proxy
+defaultQueueImplementation ∷ QueueImplementation
+defaultQueueImplementation = QueueImplementation (Proxy ∷ ∀ α. Proxy (TBMChan α))
 
 -- | This constructs a 'KinesisProducer' and closes it when you have done with
 -- it.
@@ -488,14 +501,12 @@ defaultQueueProxy = Proxy
 withKinesisProducer
   ∷ ( MonadIO m
     , MonadBaseControl IO m
-    , BoundedCloseableQueue q MessageQueueItem
     )
-  ⇒ Proxy q
-  → ProducerKit
+  ⇒ ProducerKit
   → (KinesisProducer → m α)
   → m α
-withKinesisProducer q =
-  runCodensity ∘ managedKinesisProducer q
+withKinesisProducer =
+  runCodensity ∘ managedKinesisProducer
 
 -- | map at most n actions concurrently
 --
