@@ -1,6 +1,6 @@
 -- Copyright (c) 2013-2014 PivotCloud, Inc.
 --
--- Aws.Kinesis.Client.Queue
+-- Aws.Kinesis.Client.Internal.Queue
 --
 -- Please feel free to contact us at licensing@pivotmail.com with any
 -- contributions, additions, or other feedback; we would love to hear from
@@ -30,13 +30,13 @@
 {-# LANGUAGE UnicodeSyntax #-}
 
 -- |
--- Module: Aws.Kinesis.Client.Queue
+-- Module: Aws.Kinesis.Client.Internal.Queue
 -- Copyright: Copyright © 2013-2014 PivotCloud, Inc.
 -- License: Apache-2.0
 -- Maintainer: Jon Sterling <jsterling@alephcloud.com>
 -- Stability: experimental
 --
-module Aws.Kinesis.Client.Queue
+module Aws.Kinesis.Client.Internal.Queue
 ( BoundedCloseableQueue(..)
 ) where
 

@@ -20,7 +20,9 @@ library
   exposed-modules:     Aws.Kinesis.Client.Common
                        Aws.Kinesis.Client.Consumer
                        Aws.Kinesis.Client.Producer
-                       Aws.Kinesis.Client.Queue
+                       Aws.Kinesis.Client.Producer.Kit
+                       Aws.Kinesis.Client.Producer.Internal
+                       Aws.Kinesis.Client.Internal.Queue
   -- other-modules:
   -- other-extensions:
   build-depends:       base >=4.7 && <4.8,

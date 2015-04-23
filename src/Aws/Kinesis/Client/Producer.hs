@@ -51,48 +51,23 @@ module Aws.Kinesis.Client.Producer
 , writeProducer
 , Message
 
-  -- * Producer Environment
-, ProducerKit(..)
-, makeProducerKit
-  -- ** Queue Implementations
-, QueueImplementation(..)
-, defaultQueueImplementation
-
-  -- ** Lenses
-, pkKinesisKit
-, pkStreamName
-, pkBatchPolicy
-, pkRetryPolicy
-, pkMessageQueueBounds
-, pkMaxConcurrency
-, pkCleanupTimeout
-, pkQueueImplementation
+, module Aws.Kinesis.Client.Producer.Kit
 
 -- * Exceptions
 , WriteProducerException(..)
 , ProducerCleanupTimedOut(..)
 , ProducerWorkerDied(..)
-
-, pattern MaxMessageSize
-
--- * Policies
-, BatchPolicy
-, defaultBatchPolicy
-, bpBatchSize
-
-, RetryPolicy
-, defaultRetryPolicy
-, rpRetryCount
 ) where
 
 import qualified Aws.Kinesis as Kin
 import Aws.Kinesis.Client.Common
-import Aws.Kinesis.Client.Queue
+import Aws.Kinesis.Client.Producer.Kit
+import Aws.Kinesis.Client.Producer.Internal
+import Aws.Kinesis.Client.Internal.Queue
 
 import Control.Applicative
 import Control.Concurrent.Async.Lifted
 import Control.Concurrent.Lifted hiding (yield)
-import Control.Concurrent.STM.TBMChan
 import Control.Exception.Enclosed
 import Control.Exception.Lifted
 import Control.Lens
@@ -112,171 +87,6 @@ import Prelude.Unicode
 import qualified System.Random as R
 import System.IO
 
--- | The maximum size in bytes of a message.
---
-pattern MaxMessageSize = 51000
-
--- | The producer batches records according to a user-specified policy.
---
-data BatchPolicy
-  = BatchPolicy
-  { _bpBatchSize ∷ {-# UNPACK #-} !Natural
-  } deriving (Eq, Show)
-
--- | The number of records to send in a single request. This is only used
--- when the endpoint is set to 'PutRecordsEndpoint'.
---
-bpBatchSize ∷ Lens' BatchPolicy Natural
-bpBatchSize = lens _bpBatchSize $ \bp bs → bp { _bpBatchSize = bs }
-
--- | The default batching policy sends @200@ records per 'PutRecordsEndpoint'
--- request.
---
-defaultBatchPolicy ∷ BatchPolicy
-defaultBatchPolicy = BatchPolicy
-  { _bpBatchSize = 200
-  }
-
--- | The producer will attempt to re-send records which failed according to a
--- user-specified policy. This policy applies to failures which occur in the
--- process of sending a message to Kinesis, not those which occur in the course
--- of enqueuing a message.
-data RetryPolicy
-  = RetryPolicy
-  { _rpRetryCount ∷ {-# UNPACK #-} !Natural
-  } deriving (Eq, Show)
-
--- | The number of times to retry sending a message after it has first failed.
---
-rpRetryCount ∷ Lens' RetryPolicy Natural
-rpRetryCount = lens _rpRetryCount $ \rp n → rp { _rpRetryCount = n }
-
--- | The default retry policy will attempt @5@ retries for a message.
---
-defaultRetryPolicy ∷ RetryPolicy
-defaultRetryPolicy = RetryPolicy
-  { _rpRetryCount = 5
-  }
-
-type Message = T.Text
-
-data MessageQueueItem
-  = MessageQueueItem
-  { _mqiMessage ∷ !Message
-  -- ^ The contents of the message
-
-  , _mqiPartitionKey ∷ !Kin.PartitionKey
-  -- ^ The partition key the message is destined for
-
-  , _mqiRemainingAttempts ∷ {-# UNPACK #-} !Natural
-  -- ^ The number of times remaining to try and publish this message
-  } deriving (Eq, Show)
-
-mqiMessage ∷ Lens' MessageQueueItem Message
-mqiMessage = lens _mqiMessage $ \i m → i { _mqiMessage = m }
-
-mqiPartitionKey ∷ Lens' MessageQueueItem Kin.PartitionKey
-mqiPartitionKey = lens _mqiPartitionKey $ \i s → i { _mqiPartitionKey = s }
-
-mqiRemainingAttempts ∷ Lens' MessageQueueItem Natural
-mqiRemainingAttempts = lens _mqiRemainingAttempts $ \i n → i { _mqiRemainingAttempts = n }
-
-messageQueueItemIsEligible
-  ∷ MessageQueueItem
-  → Bool
-messageQueueItemIsEligible =
-  (≥ 1) ∘ _mqiRemainingAttempts
-
-data QueueImplementation
-  = ∀ proxy q. BoundedCloseableQueue q MessageQueueItem
-  ⇒ QueueImplementation (proxy q)
-
--- | The basic input required to construct a Kinesis producer.
---
-data ProducerKit
-  = ProducerKit
-  { _pkKinesisKit ∷ !KinesisKit
-  -- ^ The basic information required to send requests to AWS Kinesis.
-
-  , _pkStreamName ∷ !Kin.StreamName
-  -- ^ The name of the stream to send records to.
-
-  , _pkBatchPolicy ∷ !BatchPolicy
-  -- ^ The record batching policy for the producer.
-
-  , _pkRetryPolicy ∷ !RetryPolicy
-  -- ^ The retry policy for the producer.
-
-  , _pkMessageQueueBounds ∷ {-# UNPACK #-} !Natural
-  -- ^ The maximum number of records that may be enqueued at one time.
-
-  , _pkMaxConcurrency ∷ {-# UNPACK #-} !Natural
-  -- ^ The number of requests to run concurrently (minimum: 1).
-
-  , _pkCleanupTimeout ∷ !(Maybe Natural)
-  -- ^ The timeout in milliseconds, after which the producer's cleanup routine
-  -- will terminate, finished or not, throwing 'ProducerCleanupTimedOut'.
-
-  , _pkQueueImplementation ∷ QueueImplementation
-  -- ^ The Kinesis Producer is parameterized over a concrete queue implementation.
-  }
-
--- | Create a 'ProducerKit' with default settings.
---
-makeProducerKit
-  ∷ KinesisKit
-  → Kin.StreamName
-  → ProducerKit
-makeProducerKit kinesisKit streamName = ProducerKit
-  { _pkKinesisKit = kinesisKit
-  , _pkStreamName = streamName
-  , _pkBatchPolicy = defaultBatchPolicy
-  , _pkRetryPolicy = defaultRetryPolicy
-  , _pkMessageQueueBounds = 10000
-  , _pkMaxConcurrency = 3
-  , _pkCleanupTimeout = Nothing
-  , _pkQueueImplementation = defaultQueueImplementation
-  }
-
--- | A lens for '_pkKinesisKit'.
---
-pkKinesisKit ∷ Lens' ProducerKit KinesisKit
-pkKinesisKit = lens _pkKinesisKit $ \pk kk → pk { _pkKinesisKit = kk }
-
--- | A lens for '_pkStreamName'.
---
-pkStreamName ∷ Lens' ProducerKit Kin.StreamName
-pkStreamName = lens _pkStreamName $ \pk sn → pk { _pkStreamName = sn }
-
--- | A lens for '_pkBatchPolicy'.
---
-pkBatchPolicy ∷ Lens' ProducerKit BatchPolicy
-pkBatchPolicy = lens _pkBatchPolicy $ \pk bp → pk { _pkBatchPolicy = bp }
-
--- | A lens for '_pkRetryPolicy'.
---
-pkRetryPolicy ∷ Lens' ProducerKit RetryPolicy
-pkRetryPolicy = lens _pkRetryPolicy $ \pk rp → pk { _pkRetryPolicy = rp }
-
--- | A lens for '_pkMessageQueueBounds'.
---
-pkMessageQueueBounds ∷ Lens' ProducerKit Natural
-pkMessageQueueBounds = lens _pkMessageQueueBounds $ \pk qb → pk { _pkMessageQueueBounds = qb }
-
--- | A lens for '_pkMaxConcurrency'.
---
-pkMaxConcurrency ∷ Lens' ProducerKit Natural
-pkMaxConcurrency = lens _pkMaxConcurrency $ \pk n → pk { _pkMaxConcurrency = n }
-
--- | A lens for '_pkCleanupTimeout'.
---
-pkCleanupTimeout ∷ Lens' ProducerKit (Maybe Natural)
-pkCleanupTimeout = lens _pkCleanupTimeout $ \pk n → pk { _pkCleanupTimeout = n }
-
--- | A lens for '_pkQueueImplementation'.
---
-pkQueueImplementation ∷ Setter' ProducerKit QueueImplementation
-pkQueueImplementation = lens _pkQueueImplementation $ \pk q → pk { _pkQueueImplementation = q }
 
 -- | The (abstract) Kinesis producer client.
 --
@@ -491,9 +301,6 @@ managedKinesisProducer kit@ProducerKit{_pkQueueImplementation = QueueImplementat
           either throwIO return innerResult
         Right (workerResult ∷ Either SomeException ()) →
           throwIO ∘ ProducerWorkerDied $ workerResult ^? _Left
-
-defaultQueueImplementation ∷ QueueImplementation
-defaultQueueImplementation = QueueImplementation (Proxy ∷ ∀ α. Proxy (TBMChan α))
 
 -- | This constructs a 'KinesisProducer' and closes it when you have done with
 -- it.
