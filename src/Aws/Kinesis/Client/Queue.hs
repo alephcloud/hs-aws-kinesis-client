@@ -43,6 +43,7 @@ module Aws.Kinesis.Client.Queue
 import Control.Applicative
 import Control.Concurrent.STM
 import Control.Concurrent.STM.TBMQueue
+import Control.Concurrent.STM.TBMChan
 import Control.Monad.Unicode
 import Numeric.Natural
 import Prelude.Unicode
@@ -165,3 +166,60 @@ instance BoundedCloseableQueue (TBMQueue a) a where
     atomically $
       (&&) <$> isClosedTBMQueue q <*> isEmptyTBMQueue q
 
+instance BoundedCloseableQueue (TBMChan a) a where
+  newQueue =
+    newTBMChanIO ∘ fromIntegral
+
+  closeQueue =
+    atomically ∘ closeTBMChan
+
+  writeQueue q a =
+    atomically $ isClosedTBMChan q ≫= \case
+      True → return False
+      False → True <$ writeTBMChan q a
+
+  tryWriteQueue q a =
+    atomically $ tryWriteTBMChan q a ≫= \case
+      Nothing → return $ Just False
+      Just False → return Nothing
+      Just True → return $ Just True
+
+  readQueue =
+    atomically ∘ readTBMChan
+
+  isClosedQueue =
+    atomically ∘ isClosedTBMChan
+
+  isEmptyQueue =
+    atomically ∘ isEmptyTBMChan
+
+  isClosedAndEmptyQueue q =
+    atomically $
+      (&&) <$> isClosedTBMChan q <*> isEmptyTBMChan q
+
+  -- TODO: update implementation of takeQueueTimeout w/ Lars's suggestions
+  takeQueueTimeout q n timeoutDelay = do
+    timedOutVar ← registerDelay $ fromIntegral timeoutDelay
+    let
+      readItems xs =
+        -- if the queue is closed, then return what we have already got;
+        -- otherwise, block until we can read an item from it.
+        readTBMChan q ≫= \case
+          Nothing → return xs
+          Just x → go (x:xs)
+
+      timeout =
+        -- block until the timeout fires
+        readTVar timedOutVar ≫= check
+
+      go xs
+        | length xs ≥ fromIntegral n =
+            -- if we have got enough items, return immediately
+            return xs
+
+        | otherwise =
+            -- either we continue reading from the queue, or we have run out of
+            -- time
+            readItems xs <|> xs <$ timeout
+
+    atomically $ go []
