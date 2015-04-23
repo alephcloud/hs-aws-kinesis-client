@@ -122,32 +122,24 @@ instance BoundedCloseableQueue (TBMQueue a) a where
   readQueue =
     atomically ∘ readTBMQueue
 
-  -- TODO: update implementation of takeQueueTimeout w/ Lars's suggestions
   takeQueueTimeout q n timeoutDelay = do
     timedOutVar ← registerDelay $ fromIntegral timeoutDelay
-    let
-      readItems xs =
-        -- if the queue is closed, then return what we have already got;
-        -- otherwise, block until we can read an item from it.
-        readTBMQueue q ≫= \case
-          Nothing → return xs
-          Just x → go (x:xs)
 
+    let
       timeout =
-        -- block until the timeout fires
         readTVar timedOutVar ≫= check
 
+      readItems xs = do
+        atomically (Left <$> timeout <|> Right <$> readTBMQueue q) ≫= \case
+          Left _ → return xs
+          Right Nothing → return xs
+          Right (Just x) → go (x:xs)
+
       go xs
-        | length xs ≥ fromIntegral n =
-            -- if we have got enough items, return immediately
-            return xs
+        | length xs ≥ fromIntegral n = return xs
+        | otherwise = readItems xs
 
-        | otherwise =
-            -- either we continue reading from the queue, or we have run out of
-            -- time
-            readItems xs <|> xs <$ timeout
-
-    atomically $ go []
+    go []
 
   isClosedQueue =
     atomically ∘ isClosedTBMQueue
@@ -190,29 +182,22 @@ instance BoundedCloseableQueue (TBMChan a) a where
     atomically $
       (&&) <$> isClosedTBMChan q <*> isEmptyTBMChan q
 
-  -- TODO: update implementation of takeQueueTimeout w/ Lars's suggestions
   takeQueueTimeout q n timeoutDelay = do
     timedOutVar ← registerDelay $ fromIntegral timeoutDelay
-    let
-      readItems xs =
-        -- if the queue is closed, then return what we have already got;
-        -- otherwise, block until we can read an item from it.
-        readTBMChan q ≫= \case
-          Nothing → return xs
-          Just x → go (x:xs)
 
+    let
       timeout =
-        -- block until the timeout fires
         readTVar timedOutVar ≫= check
 
+      readItems xs = do
+        atomically (Left <$> timeout <|> Right <$> readTBMChan q) ≫= \case
+          Left _ → return xs
+          Right Nothing → return xs
+          Right (Just x) → go (x:xs)
+
       go xs
-        | length xs ≥ fromIntegral n =
-            -- if we have got enough items, return immediately
-            return xs
+        | length xs ≥ fromIntegral n = return xs
+        | otherwise = readItems xs
 
-        | otherwise =
-            -- either we continue reading from the queue, or we have run out of
-            -- time
-            readItems xs <|> xs <$ timeout
+    go []
 
-    atomically $ go []
