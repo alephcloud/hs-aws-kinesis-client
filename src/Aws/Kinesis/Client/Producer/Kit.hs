@@ -16,26 +16,11 @@
 -- License for the specific language governing permissions and limitations
 -- under the License.
 
-{-# LANGUAGE BangPatterns #-}
-{-# LANGUAGE ConstraintKinds #-}
-{-# LANGUAGE DeriveDataTypeable #-}
-{-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE GADTs #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE MultiWayIf #-}
-{-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE RankNTypes #-}
-{-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE PatternSynonyms #-}
-{-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE StandaloneDeriving #-}
-{-# LANGUAGE TupleSections #-}
 {-# LANGUAGE UnicodeSyntax #-}
 
 -- |
--- Module: Aws.Kinesis.Client.Producer
+-- Module: Aws.Kinesis.Client.Producer.Kit
 -- Copyright: Copyright © 2013-2014 PivotCloud, Inc.
 -- License: Apache-2.0
 -- Maintainer: Jon Sterling <jsterling@alephcloud.com>
