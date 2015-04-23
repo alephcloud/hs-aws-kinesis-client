@@ -157,11 +157,16 @@ defaultRetryPolicy = RetryPolicy
   { _rpRetryCount = 5
   }
 
+-- | A proxy object for specifying a concrete queue implementation. You may
+-- provide your own, or use 'defaultQueueImplementation'.
+--
 data QueueImplementation
   = ∀ proxy q
   . BoundedCloseableQueue q MessageQueueItem
   ⇒ QueueImplementation (proxy q)
 
+-- | The default 'QueueImplementation' is based on 'TBMChan'.
+--
 defaultQueueImplementation ∷ QueueImplementation
 defaultQueueImplementation = QueueImplementation (Proxy ∷ ∀ α. Proxy (TBMChan α))
 
