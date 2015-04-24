@@ -6,7 +6,7 @@ license:             Apache-2.0
 license-file:        LICENSE
 author:              Jon Sterling
 maintainer:          jon@jonmsterling.com
-copyright:           Copyright (c) 2013-2014 PivotCloud, Inc.
+copyright:           Copyright (c) 2013-2015 PivotCloud, Inc.
 category:            Cloud
 build-type:          Simple
 cabal-version:       >=1.10

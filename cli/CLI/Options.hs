@@ -1,4 +1,4 @@
--- Copyright (c) 2013-2014 PivotCloud, Inc.
+-- Copyright (c) 2013-2015 PivotCloud, Inc.
 --
 -- Aws.Kinesis.Client.Consumer
 --
@@ -23,7 +23,7 @@
 
 -- |
 -- Module: CLI.Options
--- Copyright: Copyright © 2013-2014 PivotCloud, Inc.
+-- Copyright: Copyright © 2013-2015 PivotCloud, Inc.
 -- License: Apache-2.0
 -- Maintainer: Jon Sterling <jsterling@alephcloud.com>
 -- Stability: experimental
