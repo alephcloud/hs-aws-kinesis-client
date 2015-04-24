@@ -20,6 +20,7 @@ library
   exposed-modules:     Aws.Kinesis.Client.Common
                        Aws.Kinesis.Client.Consumer
                        Aws.Kinesis.Client.Consumer.Kit
+                       Aws.Kinesis.Client.Consumer.Internal
                        Aws.Kinesis.Client.Consumer.Internal.ShardState
                        Aws.Kinesis.Client.Consumer.Internal.SavedStreamState
                        Aws.Kinesis.Client.Consumer.Internal.Kit

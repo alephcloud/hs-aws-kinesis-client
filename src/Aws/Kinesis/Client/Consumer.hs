@@ -60,15 +60,11 @@ module Aws.Kinesis.Client.Consumer
 ) where
 
 import Aws.Kinesis
-import Aws.Kinesis.Client.Common
-import Aws.Kinesis.Client.Consumer.Internal.Kit
-import Aws.Kinesis.Client.Consumer.Internal.ShardState
-import Aws.Kinesis.Client.Consumer.Internal.SavedStreamState
+import Aws.Kinesis.Client.Consumer.Internal
 
 import Control.Concurrent.Async.Lifted
 import Control.Concurrent.Lifted hiding (yield)
 import Control.Concurrent.STM
-import Control.Concurrent.STM.Queue
 import Control.Exception.Lifted
 import Control.Lens
 import Control.Lens.Action
@@ -80,23 +76,19 @@ import qualified Data.Carousel as CR
 import qualified Data.Map as M
 import Data.Traversable (for)
 import Data.Conduit
-import qualified Data.Conduit.List as CL
 import Prelude.Unicode
-
-type MessageQueueItem = (ShardState, Record)
-type StreamState = CR.Carousel ShardState
 
 -- | The 'KinesisConsumer' maintains state about which shards to pull from.
 --
 data KinesisConsumer
   = KinesisConsumer
-  { _kcMessageQueue ∷ !(TBQueue MessageQueueItem)
+  { _kcMessageQueue ∷ !MessageQueue
   , _kcStreamState ∷ !(TVar StreamState)
   }
 
 -- | A getter for '_kcMessageQueue'.
 --
-kcMessageQueue ∷ Getter KinesisConsumer (TBQueue MessageQueueItem)
+kcMessageQueue ∷ Getter KinesisConsumer MessageQueue
 kcMessageQueue = to _kcMessageQueue
 
 -- | A getter for '_kcStreamState'.
@@ -162,74 +154,6 @@ withKinesisConsumer kit inner = do
       res ← inner $ KinesisConsumer messageQueue state
       return res
 
--- | This requests new information from Kinesis and reconciles that with an
--- existing carousel of shard states.
---
-updateStreamState
-  ∷ ConsumerKit
-  → StreamState
-  → IO StreamState
-updateStreamState ConsumerKit{..} state = do
-  let
-    existingShardIds = state ^. CR.clList <&> view ssShardId
-    shardSource =
-      flip mapOutputMaybe (streamOpenShardSource _ckKinesisKit _ckStreamName) $ \sh@Shard{..} →
-        if shardShardId ∈ existingShardIds
-          then Nothing
-          else Just sh
-
-  newShards ← shardSource $$ CL.consume
-  shardStates ← forM newShards $ \Shard{..} → do
-    let
-      startingSequenceNumber =
-        _ckSavedStreamState ^? _Just ∘ _SavedStreamState ∘ ix shardShardId
-      iteratorType =
-        maybe
-          _ckIteratorType
-          (const AfterSequenceNumber)
-          startingSequenceNumber
-
-    GetShardIteratorResponse it ← runKinesis _ckKinesisKit GetShardIterator
-      { getShardIteratorShardId = shardShardId
-      , getShardIteratorShardIteratorType = iteratorType
-      , getShardIteratorStartingSequenceNumber = startingSequenceNumber
-      , getShardIteratorStreamName = _ckStreamName
-      }
-
-    liftIO ∘ atomically $ do
-      iteratorVar ← newTVar $ Just it
-      sequenceNumberVar ← newTVar Nothing
-      return $ makeShardState shardShardId iteratorVar sequenceNumberVar
-
-  return ∘ CR.nub $ CR.append shardStates state
-
--- | Waits for a message queue to be emptied and fills it up again.
---
-replenishMessages
-  ∷ ConsumerKit
-  → TBQueue MessageQueueItem
-  → TVar StreamState
-  → IO Int
-replenishMessages ConsumerKit{..} messageQueue shardsVar = do
-  liftIO ∘ atomically ∘ awaitQueueEmpty $ messageQueue
-  (shard, iterator) ← liftIO ∘ atomically $ do
-    mshard ← shardsVar ^!? act readTVar ∘ CR.cursor
-    shard ← maybe retry return mshard
-    miterator ← shard ^! ssIterator ∘ act readTVar
-    iterator ← maybe retry return miterator
-    return (shard, iterator)
-
-  GetRecordsResponse{..} ← runKinesis _ckKinesisKit GetRecords
-    { getRecordsLimit = Just $ fromIntegral _ckBatchSize
-    , getRecordsShardIterator = iterator
-    }
-
-  liftIO ∘ atomically $ do
-    writeTVar (shard ^. ssIterator) getRecordsResNextShardIterator
-    forM_ getRecordsResRecords $ writeTBQueue messageQueue ∘ (shard ,)
-    modifyTVar shardsVar CR.moveRight
-
-  return $ length getRecordsResRecords
 
 -- | Await and read a single record from the consumer.
 --
