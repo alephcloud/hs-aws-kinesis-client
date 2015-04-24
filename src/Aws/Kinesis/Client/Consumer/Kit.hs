@@ -16,8 +16,6 @@
 -- License for the specific language governing permissions and limitations
 -- under the License.
 
-{-# LANGUAGE UnicodeSyntax #-}
-
 -- |
 -- Module: Aws.Kinesis.Client.Consumer.Kit
 -- Copyright: Copyright © 2013-2015 PivotCloud, Inc.
