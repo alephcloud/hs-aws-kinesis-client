@@ -16,6 +16,7 @@
 -- License for the specific language governing permissions and limitations
 -- under the License.
 
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE UnicodeSyntax #-}
@@ -58,7 +59,9 @@ import Control.Monad.Trans
 import qualified Data.Carousel as CR
 import Data.Conduit
 import qualified Data.Conduit.List as CondL
+import Data.Monoid.Unicode
 import Prelude.Unicode
+import System.IO
 
 type MessageQueueItem = (ShardState, Record)
 type MessageQueue = TBQueue MessageQueueItem
@@ -90,6 +93,12 @@ updateStreamState ConsumerKit{..} state = do
           _ckIteratorType
           (const AfterSequenceNumber)
           startingSequenceNumber
+
+    #ifdef DEBUG
+    debugPrint stdout $ "Getting " ⊕ show iteratorType ⊕ " iterator for shard " ⊕ show shardShardId
+    #else
+    return ()
+    #endif
 
     GetShardIteratorResponse it ← runKinesis _ckKinesisKit GetShardIterator
       { getShardIteratorShardId = shardShardId
@@ -126,9 +135,30 @@ replenishMessages ConsumerKit{..} messageQueue shardsVar = do
     , getRecordsShardIterator = iterator
     }
 
+  #ifdef DEBUG
+  debugPrint stdout $
+    "Replenished shard "
+      ⊕ show (shard ^. ssShardId)
+      ⊕ " with "
+      ⊕ show (length getRecordsResRecords)
+      ⊕ " records"
+  #else
+  return ()
+  #endif
+
   liftIO ∘ atomically $ do
     writeTVar (shard ^. ssIterator) getRecordsResNextShardIterator
     forM_ getRecordsResRecords $ writeTBQueue messageQueue ∘ (shard ,)
     modifyTVar shardsVar CR.moveRight
 
   return $ length getRecordsResRecords
+
+debugPrint
+  ∷ MonadIO m
+  ⇒ Handle
+  → String
+  → m ()
+debugPrint h =
+  liftIO
+    ∘ hPutStrLn h
+    ∘ ("[Kinesis Consumer] " ⊕)

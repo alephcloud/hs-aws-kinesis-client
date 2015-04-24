@@ -17,6 +17,7 @@
 -- under the License.
 
 {-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
@@ -69,6 +70,7 @@ import Control.Monad.Trans.Control
 import Control.Monad.Trans.Except
 import Data.Conduit
 import Data.Maybe
+import Data.Monoid.Unicode
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
 import Data.Traversable
@@ -152,7 +154,7 @@ putRecordsSink ProducerKit{..} = do
       case filter messageQueueItemIsEligible items of
         [] → return []
         eligibleItems → do
-          handleAny (\(SomeException e) → eligibleItems <$ liftIO (hPutStrLn stderr $ show e)) $ do
+          handleAny (\(SomeException e) → eligibleItems <$ debugPrint stderr (show e)) $ do
             requestEntries ← for eligibleItems $ \m → do
               let partitionKey = m ^. mqiPartitionKey
               return Kin.PutRecordsRequestEntry
@@ -160,6 +162,12 @@ putRecordsSink ProducerKit{..} = do
                 , Kin.putRecordsRequestEntryExplicitHashKey = Nothing
                 , Kin.putRecordsRequestEntryPartitionKey = partitionKey
                 }
+
+            #ifdef DEBUG
+            debugPrint stdout $ "will put " ⊕ show (length requestEntries) ⊕ " records"
+            #else
+            return ()
+            #endif
 
             Kin.PutRecordsResponse{..} ← runKinesis _pkKinesisKit Kin.PutRecords
               { Kin.putRecordsRecords = requestEntries
@@ -234,12 +242,18 @@ managedKinesisProducer kit@ProducerKit{_pkQueueImplementation = QueueImplementat
       result ← tryAny processQueue
       case result of
         Left exn → do
-          hPutStrLn stderr $ "Respawning Kinesis producer worker loop after exception: " ++ show exn
+          debugPrint stderr $ "Respawning worker loop after exception: " ⊕ show exn
           workerLoop
         Right () → return ()
 
     cleanupWorker _ = do
       closeQueue messageQueue
+      #ifdef DEBUG
+      debugPrint stdout "Closing queues, will clean up"
+      #else
+      return ()
+      #endif
+
       withAsync processQueue $ \cleanupHandle → do
         case _pkCleanupTimeout kit of
           Just timeout →
@@ -297,3 +311,12 @@ mapConcurrentlyN n delay f t = do
           liftIO ∘ threadDelay ∘ fromIntegral $ 1000 * delay * i
           f a
 
+debugPrint
+  ∷ MonadIO m
+  ⇒ Handle
+  → String
+  → m ()
+debugPrint h =
+  liftIO
+    ∘ hPutStrLn h
+    ∘ ("[Kinesis Producer] " ⊕)
