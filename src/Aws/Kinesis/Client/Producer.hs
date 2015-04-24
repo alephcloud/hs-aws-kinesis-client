@@ -243,7 +243,7 @@ managedKinesisProducer kit@ProducerKit{_pkQueueImplementation = QueueImplementat
       withAsync processQueue $ \cleanupHandle → do
         case _pkCleanupTimeout kit of
           Just timeout →
-            withAsync (threadDelay ∘ fromIntegral $ 1000 * timeout) $ \timeoutHandle → do
+            withAsync (threadDelay $ fromIntegral timeout) $ \timeoutHandle → do
               result ← waitEitherCatchCancel timeoutHandle cleanupHandle
               case result of
                 Left _timeoutResult →

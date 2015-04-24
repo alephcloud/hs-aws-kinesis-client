@@ -180,7 +180,7 @@ data ProducerKit
   -- ^ The number of requests to run concurrently (minimum: 1).
 
   , _pkCleanupTimeout ∷ !(Maybe Natural)
-  -- ^ The timeout in milliseconds, after which the producer's cleanup routine
+  -- ^ The timeout in microseconds, after which the producer's cleanup routine
   -- will terminate, finished or not, throwing 'ProducerCleanupTimedOut'.
 
   , _pkQueueImplementation ∷ QueueImplementation
