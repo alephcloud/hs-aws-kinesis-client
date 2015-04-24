@@ -61,9 +61,10 @@ module Aws.Kinesis.Client.Consumer
 
 import qualified Aws.Kinesis as Kin
 import Aws.Kinesis.Client.Common
+import Aws.Kinesis.Client.Consumer.Internal.Kit
+import Aws.Kinesis.Client.Consumer.Internal.ShardState
+import Aws.Kinesis.Client.Consumer.Internal.SavedStreamState
 
-import Control.Applicative
-import Control.Applicative.Unicode
 import Control.Concurrent.Async.Lifted
 import Control.Concurrent.Lifted hiding (yield)
 import Control.Concurrent.STM
@@ -75,134 +76,15 @@ import Control.Monad.Codensity
 import Control.Monad.Reader
 import Control.Monad.Trans.Control
 import Control.Monad.Unicode
-import qualified Data.Aeson as Æ
 import qualified Data.Carousel as CR
 import qualified Data.Map as M
-import qualified Data.HashMap.Strict as HM
 import Data.Traversable (for)
 import Data.Conduit
 import qualified Data.Conduit.List as CL
-import Numeric.Natural
 import Prelude.Unicode
-
--- | The internal representation for shards used by the consumer.
---
-data ShardState
-  = ShardState
-  { _ssIterator ∷ !(TVar (Maybe Kin.ShardIterator))
-  , _ssShardId ∷ !Kin.ShardId
-  , _ssLastSequenceNumber ∷ !(TVar (Maybe Kin.SequenceNumber))
-  }
-
--- | A getter for '_ssIterator'.
---
-ssIterator ∷ Getter ShardState (TVar (Maybe Kin.ShardIterator))
-ssIterator = to _ssIterator
-
--- | A lens for '_ssShardId'.
---
-ssShardId ∷ Lens' ShardState Kin.ShardId
-ssShardId = lens _ssShardId $ \ss sid → ss { _ssShardId = sid }
-
--- | A getter for '_ssLastSequenceNumber'.
---
-ssLastSequenceNumber ∷ Getter ShardState (TVar (Maybe Kin.SequenceNumber))
-ssLastSequenceNumber = to _ssLastSequenceNumber
-
--- | 'ShardState' is quotiented by shard ID.
---
-instance Eq ShardState where
-  ss == ss' = ss ^. ssShardId ≡ ss' ^. ssShardId
-
--- | The 'ConsumerKit' contains what is needed to initialize a 'KinesisConsumer'.
-data ConsumerKit
-  = ConsumerKit
-  { _ckKinesisKit ∷ !KinesisKit
-  -- ^ The credentials and configuration for making requests to AWS Kinesis.
-
-  , _ckStreamName ∷ !Kin.StreamName
-  -- ^ The name of the stream to consume from.
-
-  , _ckBatchSize ∷ !Natural
-  -- ^ The number of records to fetch at once from the stream.
-
-  , _ckIteratorType ∷ !Kin.ShardIteratorType
-  -- ^ The type of iterator to consume.
-
-  , _ckSavedStreamState ∷ !(Maybe SavedStreamState)
-  -- ^ Optionally, an initial stream state. The iterator type in
-  -- '_ckIteratorType' will be used for any shards not present in the saved
-  -- stream state; otherwise, 'Kin.AfterSequenceNumber' will be used.
-  }
-
--- | Create a 'ConsumerKit' with default settings (using iterator type
--- 'Kin.Latest' and a batch size of @200@).
---
-makeConsumerKit
-  ∷ KinesisKit
-  → Kin.StreamName
-  → ConsumerKit
-makeConsumerKit kinesisKit streamName = ConsumerKit
-  { _ckKinesisKit = kinesisKit
-  , _ckStreamName = streamName
-  , _ckBatchSize = 200
-  , _ckIteratorType = Kin.Latest
-  , _ckSavedStreamState = Nothing
-  }
-
--- | A lens for '_ckKinesisKit'.
---
-ckKinesisKit ∷ Lens' ConsumerKit KinesisKit
-ckKinesisKit = lens _ckKinesisKit $ \ck kk → ck { _ckKinesisKit = kk }
-
--- | A lens for '_ckStreamName'.
---
-ckStreamName ∷ Lens' ConsumerKit Kin.StreamName
-ckStreamName = lens _ckStreamName $ \ck sn → ck { _ckStreamName = sn }
-
--- | A lens for '_ckBatchSize'.
---
-ckBatchSize ∷ Lens' ConsumerKit Natural
-ckBatchSize = lens _ckBatchSize $ \ck bs → ck { _ckBatchSize = bs }
-
--- | A lens for '_ckIteratorType'.
---
-ckIteratorType ∷ Lens' ConsumerKit Kin.ShardIteratorType
-ckIteratorType = lens _ckIteratorType $ \ck it → ck { _ckIteratorType = it }
-
--- | A lens for '_ckSavedStreamState'.
---
-ckSavedStreamState ∷ Lens' ConsumerKit (Maybe SavedStreamState)
-ckSavedStreamState = lens _ckSavedStreamState $ \ck ss → ck { _ckSavedStreamState = ss }
-
 
 type MessageQueueItem = (ShardState, Kin.Record)
 type StreamState = CR.Carousel ShardState
-
-newtype SavedStreamState
-  = SavedStreamState
-  { _savedStreamState ∷ M.Map Kin.ShardId Kin.SequenceNumber
-  }
-
--- | An iso for 'SavedStreamState'.
---
-_SavedStreamState ∷ Iso' SavedStreamState (M.Map Kin.ShardId Kin.SequenceNumber)
-_SavedStreamState = iso _savedStreamState SavedStreamState
-
-instance Æ.ToJSON SavedStreamState where
-  toJSON (SavedStreamState m) =
-    Æ.Object ∘ HM.fromList ∘ flip fmap (M.toList m) $ \(sid, sn) →
-      let Æ.String sid' = Æ.toJSON sid
-      in sid' Æ..= sn
-
-instance Æ.FromJSON SavedStreamState where
-  parseJSON =
-    Æ.withObject "SavedStreamState" $ \xs → do
-      fmap (SavedStreamState ∘ M.fromList) ∘ for (HM.toList xs) $ \(sid, sn) → do
-        pure (,)
-          ⊛ Æ.parseJSON (Æ.String sid)
-          ⊛ Æ.parseJSON sn
-
 
 -- | The 'KinesisConsumer' maintains state about which shards to pull from.
 --
@@ -313,14 +195,12 @@ updateStreamState ConsumerKit{..} state = do
       , Kin.getShardIteratorStartingSequenceNumber = startingSequenceNumber
       , Kin.getShardIteratorStreamName = _ckStreamName
       }
-    liftIO $ do
-      iteratorVar ← newTVarIO $ Just it
-      sequenceNumberVar ← newTVarIO Nothing
-      return ShardState
-        { _ssIterator = iteratorVar
-        , _ssShardId = shardShardId
-        , _ssLastSequenceNumber = sequenceNumberVar
-        }
+
+    liftIO ∘ atomically $ do
+      iteratorVar ← newTVar $ Just it
+      sequenceNumberVar ← newTVar Nothing
+      return $ makeShardState shardShardId iteratorVar sequenceNumberVar
+
   return ∘ CR.nub $ CR.append shardStates state
 
 -- | Waits for a message queue to be emptied and fills it up again.
@@ -396,9 +276,14 @@ consumerStreamState
   → m SavedStreamState
 consumerStreamState consumer =
   liftIO ∘ atomically $ do
-    shards ← consumer ^! kcStreamState ∘ act readTVar ∘ CR.clList
-    pairs ← for shards $ \ss →
-      (ss ^. ssShardId,) <$>
-        ss ^! ssLastSequenceNumber ∘ act readTVar
-    return ∘ SavedStreamState ∘ M.fromList $ pairs ≫= \(sid, msn) →
-      msn ^.. _Just ∘ to (sid,)
+    shards ← consumer
+      ^! kcStreamState
+       ∘ act readTVar
+       ∘ CR.clList
+    pairs ← for shards $ \state → state
+      ^! ssLastSequenceNumber
+       ∘ act readTVar
+       ∘ to (state ^. ssShardId,)
+    return ∘ review _SavedStreamState ∘ M.fromList $
+      pairs ≫= \(sid, msn) →
+        msn ^.. _Just ∘ to (sid,)
