@@ -1,3 +1,40 @@
+### v0.4.0.0
+
+This release contains breaking changes.
+
+- Replaced the internal use of `MonadError` with proper open-world exceptions.
+  The exposed operations which may throw exceptions have been adjusted to
+  return `m (Either e a)`; resolves [issue
+  \#17](https://github.com/alephcloud/hs-aws-kinesis-client/issues/17).
+
+- [Producer] Implemented a cleaner shutdown routine policy: previously, the
+  producer would stay alive indefinitely until the thread on which it was
+  created is killed. Now, the producer is shut down immediately once the scope of
+  `withKinesisProducer` exits, at which point the queue will be flushed according
+  to a configurable (and optional) timeout. Resolves [issue
+  \#19](https://github.com/alephcloud/hs-aws-kinesis-client/issues/19).
+
+- [Producer] Restructured the monolithic error sum types into many smaller
+  types to better support the standard mode of use for error handling.
+
+- [Consumer] Removed unused `ConsumerError` type.
+
+- [Consumer] Changed batch size to use `Natural` type rather than `Int`.
+
+- [Producer] Parameterized the implementation by an arbitrary queue structure;
+  by default, the producer's message queue is now implemented using `TBMChan`
+  to avoid a bug in `TQueue` which causes live-locking under very heavy load.
+
+Other non-breaking changes:
+
+- [Producer] A better, more reliable implementation of consuming the input
+  queue in chunks.
+
+- Removed dependencies on `either`, `errors`, `hoist-error`, `stm-conduit`;
+  added dependency on `enclosed-exceptions`.
+
+- Increased lower bound on `monad-control` to 1.0 (for hygienic purposes).
+
 ### v0.3.0.2
 
 - Upgrade aws-general, aws-kinesis lower bounds.

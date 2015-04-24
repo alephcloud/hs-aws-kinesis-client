@@ -1,4 +1,4 @@
--- Copyright (c) 2013-2014 PivotCloud, Inc.
+-- Copyright (c) 2013-2015 PivotCloud, Inc.
 --
 -- Aws.Kinesis.Client.Common
 --
@@ -25,7 +25,7 @@
 
 -- |
 -- Module: Aws.Kinesis.Client.Common
--- Copyright: Copyright © 2013-2014 PivotCloud, Inc.
+-- Copyright: Copyright © 2013-2015 PivotCloud, Inc.
 -- License: Apache-2.0
 -- Maintainer: Jon Sterling <jsterling@alephcloud.com>
 -- Stability: experimental
@@ -35,33 +35,21 @@ module Aws.Kinesis.Client.Common
 , kkConfiguration
 , kkKinesisConfiguration
 , kkManager
-, MonadKinesis
 , runKinesis
 
   -- * Fetching Shards
 , streamShardSource
 , streamOpenShardSource
 , shardIsOpen
-
-  -- * Miscellaneous monad stuff
-, mapError
-, handleError
-, mapEnvironment
 ) where
 
 import qualified Aws
 import qualified Aws.Core as Aws
 import qualified Aws.Kinesis as Kin
-import Control.Exception
 import Control.Lens
-import Control.Error
 import Control.Monad
-import Control.Monad.Reader.Class
-import Control.Monad.Error.Class
 import Control.Monad.Trans
-import Control.Monad.Trans.Reader
 import Control.Monad.Trans.Resource
-import Control.Monad.Unicode
 import Data.Conduit
 import qualified Data.Conduit.List as CL
 import qualified Network.HTTP.Conduit as HC
@@ -91,43 +79,34 @@ kkKinesisConfiguration = lens _kkKinesisConfiguration $ \kk cfg → kk { _kkKine
 kkManager ∷ Lens' KinesisKit HC.Manager
 kkManager = lens _kkManager $ \kk mgr → kk { _kkManager = mgr }
 
--- | The minimal effect modality for running Kinesis commands.
---
-type MonadKinesis m
-  = ( MonadIO m
-    , MonadReader KinesisKit m
-    , MonadError SomeException m
-    )
-
--- | Run a Kinesis request inside 'MonadKinesis'.
+-- | Run a Kinesis request.
 --
 runKinesis
-  ∷ ( MonadKinesis m
-    , Aws.ServiceConfiguration req ~ Kin.KinesisConfiguration
+  ∷ ( Aws.ServiceConfiguration req ~ Kin.KinesisConfiguration
     , Aws.Transaction req resp
     )
-  ⇒ req
-  → m resp
-runKinesis req = do
-  KinesisKit{..} ← view id
-  eitherT throwError return ∘ syncIO ∘ runResourceT $
+  ⇒ KinesisKit
+  → req
+  → IO resp
+runKinesis KinesisKit{..} =
+  runResourceT ∘
     Aws.pureAws
       _kkConfiguration
       _kkKinesisConfiguration
       _kkManager
-      req
 
 shardIsOpen
   ∷ Kin.Shard
   → Bool
 shardIsOpen Kin.Shard{..} =
-  isNothing $ shardSequenceNumberRange ^. _2
+  has _Nothing $ shardSequenceNumberRange ^. _2
 
 fetchShardsConduit
-  ∷ MonadKinesis m
-  ⇒ Kin.StreamName
+  ∷ MonadIO m
+  ⇒ KinesisKit
+  → Kin.StreamName
   → Conduit (Maybe Kin.ShardId) m Kin.Shard
-fetchShardsConduit streamName =
+fetchShardsConduit kit streamName =
   awaitForever $ \mshardId → do
     let req = Kin.DescribeStream
           { Kin.describeStreamExclusiveStartShardId = mshardId
@@ -135,7 +114,7 @@ fetchShardsConduit streamName =
           , Kin.describeStreamStreamName = streamName
           }
     resp@(Kin.DescribeStreamResponse Kin.StreamDescription{..}) ←
-      lift $ runKinesis req
+      liftIO $ runKinesis kit req
     yield `mapM_` streamDescriptionShards
     void ∘ traverse (leftover ∘ Just) $
       Kin.describeStreamExclusiveStartShardId =<<
@@ -146,51 +125,23 @@ fetchShardsConduit streamName =
 -- | A 'Source' of shards for a stream.
 --
 streamShardSource
-  ∷ MonadKinesis m
-  ⇒ Kin.StreamName
+  ∷ MonadIO m
+  ⇒ KinesisKit
+  → Kin.StreamName
   → Source m Kin.Shard
-streamShardSource streamName =
-  CL.sourceList [Nothing] $= fetchShardsConduit streamName
+streamShardSource kit streamName =
+  CL.sourceList [Nothing] $= fetchShardsConduit kit streamName
 
 -- | A 'Source' of open shards for a stream.
 --
 streamOpenShardSource
-  ∷ MonadKinesis m
-  ⇒ Kin.StreamName
+  ∷ MonadIO m
+  ⇒ KinesisKit
+  → Kin.StreamName
   → Source m Kin.Shard
-streamOpenShardSource streamName =
-  flip mapOutputMaybe (streamShardSource streamName) $ \shard →
+streamOpenShardSource kit streamName =
+  flip mapOutputMaybe (streamShardSource kit streamName) $ \shard →
     if shardIsOpen shard
       then Just shard
       else Nothing
-
--- | This function may be used to transform a computation with errors in one
--- type to one with errors in another type. Whilst the argument is fixed at
--- 'EitherT', this may be used where the argument is in an /arbitrary/ monad,
--- since it will simply get instantiated at 'EitherT'.
---
-mapError
-  ∷ MonadError e' m
-  ⇒ (e → e')
-  → EitherT e m a
-  → m a
-mapError e = eitherT (throwError ∘ e) return
-
--- | This is a verion of 'catchError' with its arguments flipped.
---
-handleError
-  ∷ MonadError e m
-  ⇒ (e → m α)
-  → m α
-  → m α
-handleError = flip catchError
-
--- | Analogous to 'withReader', but supports a result in 'MonadReader'.
---
-mapEnvironment
-  ∷ MonadReader r' m
-  ⇒ Getter r' r
-  → ReaderT r m a
-  → m a
-mapEnvironment l m = view l ≫= runReaderT m
 

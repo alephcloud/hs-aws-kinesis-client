@@ -1,4 +1,4 @@
--- Copyright (c) 2013-2014 PivotCloud, Inc.
+-- Copyright (c) 2013-2015 PivotCloud, Inc.
 --
 -- Aws.Kinesis.Client.Consumer
 --
@@ -32,7 +32,7 @@
 
 -- |
 -- Module: Main
--- Copyright: Copyright © 2013-2014 PivotCloud, Inc.
+-- Copyright: Copyright © 2013-2015 PivotCloud, Inc.
 -- License: Apache-2.0
 -- Maintainer: Jon Sterling <jsterling@alephcloud.com>
 -- Stability: experimental
@@ -55,12 +55,9 @@ import Control.Lens
 import Control.Monad
 import Control.Monad.Trans
 import Control.Monad.Trans.Control
-import Control.Monad.Trans.Either
 import Control.Monad.Codensity
 import Control.Monad.Reader.Class
 import Control.Monad.Trans.Reader (ReaderT(..))
-import Control.Monad.Error.Class
-import Control.Monad.Error.Hoist
 import Control.Monad.Unicode
 
 import qualified Data.Aeson as A
@@ -89,7 +86,6 @@ type MonadCLI m
   = ( MonadReader CLIOptions m
     , MonadIO m
     , MonadBaseControl IO m
-    , MonadError ConsumerError m
     )
 
 fetchCredentials
@@ -99,7 +95,7 @@ fetchCredentials = do
   view clioUseInstanceMetadata ≫= \case
     True →
       loadCredentialsFromInstanceMetadata
-        <!?> KinesisError (toException NoInstanceMetadataCredentials)
+        ≫= maybe (throwIO NoInstanceMetadataCredentials) return
     False →
       view clioAccessKeys ≫= \case
         Just (CredentialsFromAccessKeys aks) →
@@ -108,43 +104,59 @@ fetchCredentials = do
             (aks ^. akSecretAccessKey)
         Just (CredentialsFromFile path) →
           loadCredentialsFromFile path credentialsDefaultKey
-            <!?> KinesisError (toException MissingCredentials)
+            ≫= maybe (throwIO MissingCredentials) return
         Nothing →
-          throwError $ KinesisError (toException MissingCredentials)
+          throwIO MissingCredentials
 
-app
+managedKinesisKit
   ∷ MonadCLI m
-  ⇒ Codensity m ExitCode
-app = do
+  ⇒ Codensity m KinesisKit
+managedKinesisKit = do
   CLIOptions{..} ← ask
   manager ← managedHttpManager
   credentials ← lift fetchCredentials
+  return KinesisKit
+    { _kkManager = manager
+    , _kkConfiguration = Configuration
+         { timeInfo = Timestamp
+         , credentials = credentials
+         , logger = defaultLog Warning
+         }
+    , _kkKinesisConfiguration = defaultKinesisConfiguration _clioRegion
+    }
+
+cliConsumerKit
+  ∷ MonadCLI m
+  ⇒ KinesisKit
+  → m ConsumerKit
+cliConsumerKit kinesisKit = do
+  CLIOptions{..} ← ask
   savedStreamState ←
     case _clioStateIn of
       Just path → liftIO $ do
         code ← catch (Just <$> BL8.readFile path) $ \case
           exn
             | isDoesNotExistError exn → return Nothing
-            | otherwise → throw exn
+            | otherwise → throwIO exn
         traverse (either (fail ∘ ("Invalid saved state: " ⊕)) return) $
           A.eitherDecode <$> code
       Nothing → return Nothing
+  return $
+    makeConsumerKit kinesisKit _clioStreamName
+      & ckBatchSize .~ 100
+      & ckIteratorType .~ _clioIteratorType
+      & ckSavedStreamState .~ savedStreamState
 
-  consumer ← managedKinesisConsumer ConsumerKit
-    { _ckKinesisKit = KinesisKit
-        { _kkManager = manager
-        , _kkConfiguration = Configuration
-             { timeInfo = Timestamp
-             , credentials = credentials
-             , logger = defaultLog Warning
-             }
-        , _kkKinesisConfiguration = defaultKinesisConfiguration _clioRegion
-        }
-    , _ckStreamName = _clioStreamName
-    , _ckBatchSize = 100
-    , _ckIteratorType = _clioIteratorType
-    , _ckSavedStreamState = savedStreamState
-    }
+app
+  ∷ MonadCLI m
+  ⇒ Codensity m ExitCode
+app = do
+  CLIOptions{..} ← ask
+
+  consumer ←
+    managedKinesisKit
+      ≫= lift ∘ cliConsumerKit
+      ≫= managedKinesisConsumer
 
   let
     source = consumerSource consumer
@@ -180,7 +192,7 @@ app = do
 
 main ∷ IO ()
 main = do
-  exitCode ← eitherT (fail ∘ show) return $
+  exitCode ←
     liftIO (execParser parserInfo)
       ≫= runReaderT (lowerCodensity app)
   exitWith exitCode
