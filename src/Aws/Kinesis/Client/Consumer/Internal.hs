@@ -59,9 +59,13 @@ import Control.Monad.Trans
 import qualified Data.Carousel as CR
 import Data.Conduit
 import qualified Data.Conduit.List as CondL
-import Data.Monoid.Unicode
 import Prelude.Unicode
+
+#ifdef DEBUG
+import Data.Monoid.Unicode
 import System.IO
+#else
+#endif
 
 type MessageQueueItem = (ShardState, Record)
 type MessageQueue = TBQueue MessageQueueItem
@@ -94,11 +98,11 @@ updateStreamState ConsumerKit{..} state = do
           (const AfterSequenceNumber)
           startingSequenceNumber
 
-    #ifdef DEBUG
+#ifdef DEBUG
     debugPrint stdout $ "Getting " ⊕ show iteratorType ⊕ " iterator for shard " ⊕ show shardShardId
-    #else
+#else
     return ()
-    #endif
+#endif
 
     GetShardIteratorResponse it ← runKinesis _ckKinesisKit GetShardIterator
       { getShardIteratorShardId = shardShardId
@@ -135,16 +139,16 @@ replenishMessages ConsumerKit{..} messageQueue shardsVar = do
     , getRecordsShardIterator = iterator
     }
 
-  #ifdef DEBUG
+#ifdef DEBUG
   debugPrint stdout $
     "Replenished shard "
       ⊕ show (shard ^. ssShardId)
       ⊕ " with "
       ⊕ show (length getRecordsResRecords)
       ⊕ " records"
-  #else
+#else
   return ()
-  #endif
+#endif
 
   liftIO ∘ atomically $ do
     writeTVar (shard ^. ssIterator) getRecordsResNextShardIterator
@@ -153,6 +157,7 @@ replenishMessages ConsumerKit{..} messageQueue shardsVar = do
 
   return $ length getRecordsResRecords
 
+#ifdef DEBUG
 debugPrint
   ∷ MonadIO m
   ⇒ Handle
@@ -162,3 +167,5 @@ debugPrint h =
   liftIO
     ∘ hPutStrLn h
     ∘ ("[Kinesis Consumer] " ⊕)
+#else
+#endif

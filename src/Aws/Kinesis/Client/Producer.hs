@@ -163,11 +163,11 @@ putRecordsSink ProducerKit{..} = do
                 , Kin.putRecordsRequestEntryPartitionKey = partitionKey
                 }
 
-            #ifdef DEBUG
+#ifdef DEBUG
             debugPrint stdout $ "will put " ⊕ show (length requestEntries) ⊕ " records"
-            #else
+#else
             return ()
-            #endif
+#endif
 
             Kin.PutRecordsResponse{..} ← runKinesis _pkKinesisKit Kin.PutRecords
               { Kin.putRecordsRecords = requestEntries
@@ -248,11 +248,11 @@ managedKinesisProducer kit@ProducerKit{_pkQueueImplementation = QueueImplementat
 
     cleanupWorker _ = do
       closeQueue messageQueue
-      #ifdef DEBUG
+#ifdef DEBUG
       debugPrint stdout "Closing queues, will clean up"
-      #else
+#else
       return ()
-      #endif
+#endif
 
       withAsync processQueue $ \cleanupHandle → do
         case _pkCleanupTimeout kit of
