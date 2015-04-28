@@ -171,15 +171,22 @@ app = do
       return $ maybe True (n ≥) _clioLimit
 
 
+  --  If a timeout is set, then we will race the timeout against the consumer.
   result ← lift $
     case _clioTimeout of
       Just seconds → race (threadDelay $ seconds * 1000000) runConsumer
       Nothing → Right <$> runConsumer
 
   let
-    successful = case result of
-      Left () → isn't _Just _clioLimit
-      Right b → b
+    successful =
+      case result of
+        -- if we timed out: if there a requested limit, then we failed to get
+        -- it (and this is a failure); if there was no requested limit, then we
+        -- consider this a success.
+        Left () → isn't _Just _clioLimit
+
+        -- if we did not timeout, then it is a success
+        Right b → b
 
   lift ∘ when successful ∘ void ∘ for _clioStateOut $ \outPath → do
     state ← consumerStreamState consumer
