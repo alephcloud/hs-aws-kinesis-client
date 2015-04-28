@@ -216,5 +216,5 @@ parserInfo =
   info (helper ⊛ optionsParser) $
     fullDesc
     ⊕ progDesc "Fetch a given number of records from a Kinesis stream; unlike the standard command line utilities, this interface is suitable for use with a sharded stream. If you both specify a saved stream state to be restored and an iterator type, the latter will be used on any shards which are not contained in the saved state. Minimally, you must specify your AWS credentials, a stream name, and an optional limit & timeout."
-    ⊕ header "The Kinesis Consumer CLI v0.2.0.3"
+    ⊕ header "The Kinesis Consumer CLI v0.4.0.1"
 

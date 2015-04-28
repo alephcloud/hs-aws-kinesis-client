@@ -1,3 +1,9 @@
+### v0.4.0.1
+
+This release fixes a bug in the Consumer where a saved state could get
+clobbered in case no further records were found at the restored point on a
+shard.
+
 ### v0.4.0.0
 
 This release contains breaking changes.
