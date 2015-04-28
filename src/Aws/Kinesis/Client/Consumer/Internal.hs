@@ -113,7 +113,7 @@ updateStreamState ConsumerKit{..} state = do
 
     liftIO ∘ atomically $ do
       iteratorVar ← newTVar $ Just it
-      sequenceNumberVar ← newTVar Nothing
+      sequenceNumberVar ← newTVar startingSequenceNumber
       return $ makeShardState shardShardId iteratorVar sequenceNumberVar
 
   return ∘ CR.nub $ CR.append shardStates state
