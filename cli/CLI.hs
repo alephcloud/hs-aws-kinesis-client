@@ -46,7 +46,10 @@ import Aws.Kinesis hiding (Record)
 import Aws.Kinesis.Client.Common
 import Aws.Kinesis.Client.Consumer
 
-import CLI.Options
+import CLI.Config
+
+import Configuration.Utils
+import Configuration.Utils.Aws.Credentials
 
 import Control.Concurrent.Lifted
 import Control.Concurrent.Async.Lifted
@@ -55,6 +58,7 @@ import Control.Lens
 import Control.Monad
 import Control.Monad.Trans
 import Control.Monad.Trans.Control
+import Control.Monad.Trans.Except
 import Control.Monad.Codensity
 import Control.Monad.Reader.Class
 import Control.Monad.Trans.Reader (ReaderT(..))
@@ -69,11 +73,12 @@ import Data.Monoid.Unicode
 import Data.Traversable
 import Data.Typeable
 
-import Options.Applicative
 import qualified Network.HTTP.Conduit as HC
 import Prelude.Unicode
 import System.Exit
 import System.IO.Error
+
+import PkgInfo_kinesis_cli
 
 data CLIError
   = MissingCredentials
@@ -83,38 +88,18 @@ data CLIError
 instance Exception CLIError
 
 type MonadCLI m
-  = ( MonadReader CLIOptions m
+  = ( MonadReader Config m
     , MonadIO m
     , MonadBaseControl IO m
     )
-
-fetchCredentials
-  ∷ MonadCLI m
-  ⇒ m Credentials
-fetchCredentials = do
-  view clioUseInstanceMetadata ≫= \case
-    True →
-      loadCredentialsFromInstanceMetadata
-        ≫= maybe (throwIO NoInstanceMetadataCredentials) return
-    False →
-      view clioAccessKeys ≫= \case
-        Just (CredentialsFromAccessKeys aks) →
-          makeCredentials
-            (aks ^. akAccessKeyId)
-            (aks ^. akSecretAccessKey)
-        Just (CredentialsFromFile path) →
-          loadCredentialsFromFile path credentialsDefaultKey
-            ≫= maybe (throwIO MissingCredentials) return
-        Nothing →
-          throwIO MissingCredentials
 
 managedKinesisKit
   ∷ MonadCLI m
   ⇒ Codensity m KinesisKit
 managedKinesisKit = do
-  CLIOptions{..} ← ask
+  Config{..} ← ask
   manager ← managedHttpManager
-  credentials ← lift fetchCredentials
+  credentials ← lift $ runExceptT (credentialsFromConfig _configCredentialConfig) ≫= either throwIO return
   return KinesisKit
     { _kkManager = manager
     , _kkConfiguration = Configuration
@@ -122,7 +107,7 @@ managedKinesisKit = do
          , credentials = credentials
          , logger = defaultLog Warning
          }
-    , _kkKinesisConfiguration = defaultKinesisConfiguration _clioRegion
+    , _kkKinesisConfiguration = defaultKinesisConfiguration _configRegion
     }
 
 cliConsumerKit
@@ -130,9 +115,9 @@ cliConsumerKit
   ⇒ KinesisKit
   → m ConsumerKit
 cliConsumerKit kinesisKit = do
-  CLIOptions{..} ← ask
+  Config{..} ← ask
   savedStreamState ←
-    case _clioStateIn of
+    case _configStateIn of
       Just path → liftIO $ do
         code ← catch (Just <$> BL8.readFile path) $ \case
           exn
@@ -142,16 +127,16 @@ cliConsumerKit kinesisKit = do
           A.eitherDecode <$> code
       Nothing → return Nothing
   return $
-    makeConsumerKit kinesisKit _clioStreamName
+    makeConsumerKit kinesisKit _configStreamName
       & ckBatchSize .~ 100
-      & ckIteratorType .~ _clioIteratorType
+      & ckIteratorType .~ _configIteratorType
       & ckSavedStreamState .~ savedStreamState
 
 app
   ∷ MonadCLI m
   ⇒ Codensity m ExitCode
 app = do
-  CLIOptions{..} ← ask
+  Config{..} ← ask
 
   consumer ←
     managedKinesisKit
@@ -162,18 +147,18 @@ app = do
     source = consumerSource consumer
     step n r = succ n <$ liftIO (B8.putStrLn $ recordData r)
     countingSink = CL.foldM step (1 ∷ Int)
-    sink = case _clioLimit of
+    sink = case _configLimit of
       Just limit → CL.isolate limit =$ countingSink
       Nothing → countingSink
 
     runConsumer = do
       n ← catch (source $$ sink) $ \SomeException{} → return 0
-      return $ maybe True (n ≥) _clioLimit
+      return $ maybe True (n ≥) _configLimit
 
 
   --  If a timeout is set, then we will race the timeout against the consumer.
   result ← lift $
-    case _clioTimeout of
+    case _configTimeout of
       Just seconds → race (threadDelay $ seconds * 1000000) runConsumer
       Nothing → Right <$> runConsumer
 
@@ -183,12 +168,12 @@ app = do
         -- if we timed out: if there a requested limit, then we failed to get
         -- it (and this is a failure); if there was no requested limit, then we
         -- consider this a success.
-        Left () → isn't _Just _clioLimit
+        Left () → isn't _Just _configLimit
 
         -- if we did not timeout, then it is a success
         Right b → b
 
-  lift ∘ when successful ∘ void ∘ for _clioStateOut $ \outPath → do
+  lift ∘ when successful ∘ void ∘ for _configStateOut $ \outPath → do
     state ← consumerStreamState consumer
     liftIO ∘ BL8.writeFile outPath $ A.encode state
 
@@ -197,12 +182,19 @@ app = do
       then ExitSuccess
       else ExitFailure 1
 
+mainInfo ∷ ProgramInfo Config
+mainInfo =
+  programInfoValidate
+    "Kinesis CLI"
+    pConfig
+    defaultConfig
+    validateConfig
+
 main ∷ IO ()
 main = do
-  exitCode ←
-    liftIO (execParser parserInfo)
-      ≫= runReaderT (lowerCodensity app)
-  exitWith exitCode
+  runWithPkgInfoConfiguration mainInfo pkgInfo $
+    runReaderT (lowerCodensity app)
+      >=> exitWith
 
 managedHttpManager
   ∷ ( MonadIO m
