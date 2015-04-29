@@ -1,5 +1,5 @@
 name:                aws-kinesis-client
-version:             0.4.0.1
+version:             0.4.0.2
 synopsis:            A producer & consumer client library for AWS Kinesis
 description:
     This package provides a Producer client for bulk-writing messages to a
@@ -84,7 +84,7 @@ executable kinesis-cli
                        aws >=0.10.5,
                        aws-general >=0.2.1,
                        aws-kinesis >=0.1.4,
-                       aws-kinesis-client >=0.4.0.1,
+                       aws-kinesis-client >=0.4.0.2,
                        aws-configuration-tools >=0.1.0.0,
                        conduit >=1.2.3.1,
                        configuration-tools >=0.2.12,

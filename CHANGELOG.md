@@ -1,3 +1,17 @@
+### v0.4.0.2
+
+This release contains (only) breaking changes to the Consumer CLI.
+
+We have switched to using the
+[configuration-tools](http://hackage.haskell.org/package/configuration-tools)
+package for passing options to the CLI. This makes configuration much more
+robust, and adds support for using a YAML-formatted configuration file, as well
+as granularly overriding options in a cascading manner (through multiple
+configuration files, or by passing command line arguments).
+
+See `example_config.yml` for an example configuration file. Run `kinesis-cli
+--help` to see supported command-line arguments.
+
 ### v0.4.0.1
 
 This release fixes a bug in the Consumer where a saved state could get
