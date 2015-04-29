@@ -13,7 +13,7 @@ author:              Jon Sterling
 maintainer:          jon@jonmsterling.com
 copyright:           Copyright (c) 2013-2015 PivotCloud, Inc.
 category:            Cloud
-build-type:          Simple
+build-type:          Custom
 cabal-version:       >=1.10
 extra-source-files:  CHANGELOG.md
 
@@ -85,7 +85,9 @@ executable kinesis-cli
                        aws-general >=0.2.1,
                        aws-kinesis >=0.1.4,
                        aws-kinesis-client >=0.4.0.1,
+                       aws-configuration-tools >=0.1.0.0,
                        conduit >=1.2.3.1,
+                       configuration-tools >=0.2.12,
                        http-conduit >=2.1.5,
                        kan-extensions >=4.2,
                        lens >=4.7,
