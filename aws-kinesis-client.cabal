@@ -15,7 +15,7 @@ copyright:           Copyright (c) 2013-2015 PivotCloud, Inc.
 category:            Cloud
 build-type:          Custom
 cabal-version:       >=1.10
-extra-source-files:  CHANGELOG.md
+extra-source-files:  CHANGELOG.md, example_config.yml
 
 source-repository head
   type:     git

@@ -1,0 +1,18 @@
+stream_name: mystream
+
+aws_credentials:
+  file:
+    key_name: default
+    file_name: /Users/you/.aws-keys
+
+iterator_type: TRIM_HORIZON
+
+region: us-west-2
+
+limit: null
+timeout: null
+
+# state restoration
+restore_state: null # saved_state.json
+save_state: null    # saved_state.json
+
