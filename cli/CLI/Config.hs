@@ -21,7 +21,6 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
-{-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE UnicodeSyntax #-}
 
 -- |
@@ -52,10 +51,10 @@ module CLI.Config
 
 import Aws.General
 import Aws.Kinesis
-import Configuration.Utils
+import Configuration.Utils hiding (Lens')
 import Configuration.Utils.Aws.Credentials
-
 import Control.Lens hiding ((.=))
+
 import Control.Monad
 import Control.Monad.Error.Class
 import Control.Monad.Unicode
@@ -93,7 +92,31 @@ defaultConfig = Config
   , _configStateOut = Nothing
   }
 
-makeLenses ''Config
+configStreamName ∷ Lens' Config StreamName
+configStreamName = lens _configStreamName $ \x y → x { _configStreamName = y }
+
+configRegion ∷ Lens' Config Region
+configRegion = lens _configRegion $ \x y → x { _configRegion = y }
+
+configLimit ∷ Lens' Config (Maybe Int)
+configLimit = lens _configLimit $ \x y → x { _configLimit = y }
+
+configTimeout ∷ Lens' Config (Maybe Int)
+configTimeout = lens _configTimeout $ \x y → x { _configTimeout = y }
+
+configIteratorType ∷ Lens' Config ShardIteratorType
+configIteratorType = lens _configIteratorType $ \x y → x { _configIteratorType = y }
+
+configCredentialConfig ∷ Lens' Config CredentialConfig
+configCredentialConfig = lens _configCredentialConfig $ \x y → x { _configCredentialConfig = y }
+
+configStateIn ∷ Lens' Config (Maybe FilePath)
+configStateIn = lens _configStateIn $ \x y → x { _configStateIn = y }
+
+configStateOut∷ Lens' Config (Maybe FilePath)
+configStateOut = lens _configStateOut $ \x y → x { _configStateOut = y }
+
+-- makeLenses ''Config
 
 instance FromJSON (Config → Config) where
   parseJSON =
